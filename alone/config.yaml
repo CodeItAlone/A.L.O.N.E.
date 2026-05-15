@@ -1,6 +1,18 @@
-model: "llama3.1"
+model: "llama3.1:8b"
 model_url: "http://localhost:11434"
 assistant_name: "ALONE"
 user_name: "Sir"
 max_history: 20
 history_file: "history.json"
+
+voice:
+  rate: 175
+  volume: 1.0
+  voice_index: 0
+  wake_word: "hey_jarvis"
+
+whisper:
+  model_size: "base.en"
+  device: "cuda"
+  compute_type: "float16"
+  vad_filter: true
