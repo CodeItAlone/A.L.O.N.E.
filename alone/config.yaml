@@ -1,0 +1,6 @@
+model: "llama3.1"
+model_url: "http://localhost:11434"
+assistant_name: "ALONE"
+user_name: "Sir"
+max_history: 20
+history_file: "history.json"

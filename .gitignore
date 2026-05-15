@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Project specific
+history.json
+alone/history.json
+alone/venv/
+
+# AI Agent metadata
+.agent/
+.gemini/
+
+# OS specific
+.DS_Store
+Thumbs.db
