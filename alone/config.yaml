@@ -10,9 +10,12 @@ voice:
   volume: 1.0
   voice_index: 0
   wake_word: "hey_jarvis"
+  openwakeword_threshold: 0.5
+  ptt_mode: false
 
 whisper:
   model_size: "base.en"
-  device: "cuda"
-  compute_type: "float16"
+  device: "cpu" # Default to cpu for stability, int8 handles it well
+  compute_type: "int8"
   vad_filter: true
+  language: "en"

@@ -1,69 +1,94 @@
 import pyttsx3
-import threading
-import random
-import time
+import queue
+import sys
+import gc
 
-class Speaker:
-    def __init__(self, rate=175, volume=1.0, voice_index=0):
-        self.engine = pyttsx3.init()
-        self.engine.setProperty('rate', rate)
-        self.engine.setProperty('volume', volume)
-        
-        # Get available voices
-        voices = self.engine.getProperty('voices')
-        if voices:
-            # Try to find a male voice or stick to index
-            self.engine.setProperty('voice', voices[voice_index].id)
-            
-        self.confirmation_phrases = [
-            "Certainly, Sir.", 
-            "On it, Sir.", 
-            "Right away, Sir.", 
-            "Of course, Sir.", 
-            "As you wish, Sir."
-        ]
-        
-        self._is_speaking = False
+_speech_queue = queue.Queue()
 
-    def speak(self, text, use_confirmation=False):
-        """Synchronous speech"""
-        if not text:
-            return
-            
-        if use_confirmation:
-            phrase = random.choice(self.confirmation_phrases)
-            self._say(phrase)
-            
-        self._say(text)
-
-    def _say(self, text):
-        self._is_speaking = True
-        self.engine.say(text)
-        self.engine.runAndWait()
-        self._is_speaking = False
-
-    def speak_async(self, text, use_confirmation=False):
-        """Asynchronous speech in a separate thread"""
-        thread = threading.Thread(target=self.speak, args=(text, use_confirmation))
-        thread.daemon = True
-        thread.start()
-        return thread
-
-    def stop(self):
-        """Attempts to stop the current speech"""
+def speak(text):
+    """Only call from MAIN thread"""
+    from core.listener import pause_listening, resume_listening
+    if sys.platform == "win32":
         try:
-            self.engine.stop()
-        except:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
             pass
+    try:
+        pause_listening()        # stop mic FIRST
+        print(f"ALONE: {text}")
+        
+        # Initialize locally for this speech
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 175)
+        engine.setProperty('volume', 1.0)
+        voices = engine.getProperty('voices')
+        for voice in voices:
+            if "david" in voice.name.lower() or \
+               "zira" in voice.name.lower():
+                engine.setProperty('voice', voice.id)
+                break
+                
+        engine.say(text)
+        engine.runAndWait()
+        
+        # Force cleanup to release audio device locks
+        del engine
+        gc.collect()
+    except Exception as e:
+        print(f"[ALONE TTS ERROR] {e}")
+    finally:
+        resume_listening()       # always restart mic
 
-# Singleton instance
-_speaker_instance = None
+def speak_async(text):
+    """Safe to call from ANY thread — puts in queue"""
+    if text:
+        print(f"[DEBUG SPEAKER] Enqueuing: '{text[:40]}...'")
+        _speech_queue.put(text)
 
-def get_speaker(config=None):
-    global _speaker_instance
-    if _speaker_instance is None:
-        rate = config.get('voice', {}).get('rate', 175) if config else 175
-        volume = config.get('voice', {}).get('volume', 1.0) if config else 1.0
-        voice_index = config.get('voice', {}).get('voice_index', 0) if config else 0
-        _speaker_instance = Speaker(rate, volume, voice_index)
-    return _speaker_instance
+def process_speech_queue():
+    """
+    MUST be called repeatedly from MAIN thread loop.
+    Drains the queue and speaks each item.
+    """
+    from core.listener import pause_listening, resume_listening
+    if sys.platform == "win32":
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+    try:
+        while not _speech_queue.empty():
+            text = _speech_queue.get_nowait()
+            print(f"[DEBUG SPEAKER] Dequeuing: '{text[:40]}...'")
+            pause_listening()    # stop mic FIRST
+            print(f"ALONE: {text}")
+            
+            # Initialize locally for this speech
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 175)
+            engine.setProperty('volume', 1.0)
+            voices = engine.getProperty('voices')
+            for voice in voices:
+                if "david" in voice.name.lower() or \
+                   "zira" in voice.name.lower():
+                    engine.setProperty('voice', voice.id)
+                    break
+                    
+            engine.say(text)
+            engine.runAndWait()
+            
+            # Force cleanup to release audio device locks
+            del engine
+            gc.collect()
+            
+            resume_listening()   # restart mic after
+    except queue.Empty:
+        pass
+    except Exception as e:
+        print(f"[ALONE TTS QUEUE ERROR] {e}")
+        resume_listening()       # safety net
+
+def get_queue():
+    return _speech_queue

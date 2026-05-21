@@ -1,98 +1,101 @@
-import os
-import sys
 from faster_whisper import WhisperModel
-import ctranslate2
-
-def _add_cuda_to_path():
-    """Finds and adds NVIDIA pip package library paths to the OS PATH (Windows fix)"""
-    if sys.platform != "win32":
-        return
-        
-    # Try to find nvidia package paths in site-packages
-    import site
-    package_dirs = site.getsitepackages()
-    if hasattr(site, 'getusersitepackages'):
-        package_dirs.append(site.getusersitepackages())
-        
-    # venv fallback
-    package_dirs.append(os.path.join(sys.prefix, "Lib", "site-packages"))
-        
-    for base in package_dirs:
-        nvidia_path = os.path.join(base, "nvidia")
-        if os.path.exists(nvidia_path):
-            # Check for cublas and cudnn bin folders
-            for sub in ["cublas", "cudnn"]:
-                bin_path = os.path.join(nvidia_path, sub, "bin")
-                if os.path.exists(bin_path):
-                    if bin_path not in os.environ["PATH"]:
-                        os.environ["PATH"] = bin_path + os.pathsep + os.environ["PATH"]
-                        print(f"[*] Added {sub} to PATH")
-
-# Fix CUDA paths before initializing model
-_add_cuda_to_path()
+import os
 
 class Transcriber:
     def __init__(self, model_size="base.en", device="cpu", compute_type="int8"):
-        """
-        Initialize the Whisper model.
-        device: "cuda" or "cpu"
-        compute_type: "int8", "float16", etc.
-        """
-        # Auto-detect CUDA if device is not specified or if "cuda" is requested
-        cuda_available = False
+        self.vad_filter = True
+        self.model = None
+        
+        if device == "cuda":
+            print("[*] Checking CUDA availability and PATH configuration for Whisper...")
+            try:
+                # Add typical Windows CUDA toolkit and cuDNN paths dynamically to PATH env var
+                cuda_paths = [
+                    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin",
+                    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.3\bin",
+                    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin",
+                    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin",
+                    r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin",
+                    r"C:\Program Files\NVIDIA\CUDNN\v9.0\bin",
+                    r"C:\Program Files\NVIDIA\CUDNN\v8.9\bin"
+                ]
+                for path in cuda_paths:
+                    if os.path.exists(path) and path not in os.environ["PATH"]:
+                        os.environ["PATH"] += os.pathsep + path
+                        print(f"[*] Dynamically registered CUDA path: {path}")
+                
+                # Attempt to initialize WhisperModel on GPU
+                # Using float16 for CUDA standard speedup
+                self.model = WhisperModel(model_size, device="cuda", compute_type="float16")
+                print(f"[+] Whisper initialized successfully with GPU CUDA acceleration (float16). Model: '{model_size}'")
+                return
+            except Exception as e:
+                print(f"[!] CUDA initialization failed: {e}")
+                print("[!] This is usually due to missing Windows CUDA dlls (cublas64_12.dll or cudnn_ops_infer64_12.dll).")
+                print("[!] Falling back gracefully to optimized CPU inference (int8)...")
+        
+        # CPU Fallback
         try:
-            cuda_available = ctranslate2.get_cuda_device_count() > 0
-        except:
-            pass
-
-        if device == "cuda" and not cuda_available:
-            print("[!] CUDA requested but not available. Falling back to CPU.")
-            device = "cpu"
-            compute_type = "int8"
-        elif device == "cuda":
-            # For RTX 5050, float16 is usually faster than int8
-            compute_type = "float16"
-            
-        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        self.confidence_threshold = 0.6
+            self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            print(f"[+] Whisper initialized successfully on CPU (int8). Model: '{model_size}'")
+        except Exception as e:
+            print(f"[!] Critical Error: Failed to initialize Whisper on CPU: {e}")
+            self.model = None
 
     def transcribe(self, audio_path):
-        """
-        Transcribe audio file to text.
-        Returns: text string
-        """
+        """Transcribes audio file to text using faster-whisper"""
         if not os.path.exists(audio_path):
             return ""
 
-        segments, info = self.model.transcribe(audio_path, beam_size=5, vad_filter=True)
-        
-        full_text = []
-        confidences = []
-        
-        for segment in segments:
-            full_text.append(segment.text)
-            # segment.avg_logprob is a log probability, we can convert to 0-1 range
-            # but usually, we just take the text if it's not silence
-            # segment.no_speech_prob is also useful
-            confidences.append(1.0 - segment.no_speech_prob)
-
-        if not full_text:
+        if not self.model:
+            print("[!] Transcription failed: WhisperModel is not initialized.")
             return ""
 
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
-        
-        if avg_confidence < self.confidence_threshold:
+        try:
+            segments, info = self.model.transcribe(
+                audio_path, 
+                beam_size=5, 
+                vad_filter=self.vad_filter,
+                language="en"
+            )
+            
+            text_segments = []
+            for segment in segments:
+                text_segments.append(segment.text)
+            
+            full_text = " ".join(text_segments).strip()
+            
+            if not full_text:
+                return ""
+            
+            return full_text
+            
+        except Exception as e:
+            print(f"[!] Transcription error: {e}")
             return ""
 
-        return " ".join(full_text).strip()
+def get_transcriber(config):
+    whisper_cfg = config.get('whisper', {})
+    return Transcriber(
+        model_size=whisper_cfg.get('model_size', 'base.en'),
+        device=whisper_cfg.get('device', 'cpu'),
+        compute_type=whisper_cfg.get('compute_type', 'int8')
+    )
 
-# Singleton instance
 _transcriber_instance = None
 
-def get_transcriber(config=None):
+def transcribe(audio_path):
     global _transcriber_instance
     if _transcriber_instance is None:
-        model_size = config.get('whisper', {}).get('model_size', 'base.en') if config else 'base.en'
-        device = "cuda" # Defaulting to cuda as requested by user
-        _transcriber_instance = Transcriber(model_size, device=device)
-    return _transcriber_instance
+        import yaml
+        def _load_config(path="config.yaml"):
+            import os
+            if not os.path.exists(path):
+                if os.path.exists("../config.yaml"):
+                    path = "../config.yaml"
+            with open(path, "r") as f:
+                return yaml.safe_load(f)
+        config = _load_config()
+        _transcriber_instance = get_transcriber(config)
+    return _transcriber_instance.transcribe(audio_path)
+
