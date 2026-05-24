@@ -44,8 +44,17 @@ def handle_audio(audio_path):
         # Check for shutdown keywords
         if clean_text.strip().lower() in ["alone shutdown", 
                                            "alone exit",
-                                           "goodbye alone"]:
-            speak_async("Goodbye, Sir.")
+                                           "goodbye alone",
+                                           "alone end session",
+                                           "end session"]:
+            from core import memory
+            summary = memory.get_session_summary()
+            speak_output = "Ending session, Sir. "
+            if "No memories" not in summary:
+                speak_output += "Here is a recap of today's session:\n" + summary
+            else:
+                speak_output += "Goodbye, Sir."
+            speak_async(speak_output)
             _shutdown_flag.set()
             return
         
@@ -68,7 +77,15 @@ def text_input_loop():
             user_input = input("You (text): ")
             if not user_input.strip():
                 continue
-            if user_input.lower() in ["exit", "quit"]:
+            if user_input.lower() in ["exit", "quit", "alone end session", "end session"]:
+                from core import memory
+                summary = memory.get_session_summary()
+                speak_output = "Ending session, Sir. "
+                if "No memories" not in summary:
+                    speak_output += "Here is a recap of today's session:\n" + summary
+                else:
+                    speak_output += "Goodbye, Sir."
+                speak_async(speak_output)
                 _shutdown_flag.set()
                 break
             result = run_agent(user_input)

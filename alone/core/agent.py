@@ -19,8 +19,15 @@ except (ImportError, ModuleNotFoundError):
     from langchain_classic.memory import ConversationBufferMemory  # type: ignore
 from tools import ALL_TOOLS
 
+try:
+    from langchain.agents.output_parsers import ReActSingleInputOutputParser  # type: ignore
+except (ImportError, ModuleNotFoundError):
+    try:
+        from langchain_classic.agents.output_parsers import ReActSingleInputOutputParser  # type: ignore
+    except (ImportError, ModuleNotFoundError):
+        from langchain.agents.react.agent import ReActSingleInputOutputParser  # type: ignore
+
 from langchain_core.agents import AgentFinish, AgentAction
-from langchain_classic.agents.output_parsers import ReActSingleInputOutputParser
 
 class ForgivingReActOutputParser(ReActSingleInputOutputParser):
     def parse(self, text: str):
@@ -64,8 +71,8 @@ def _load_config(path="config.yaml"):
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
-class InterruptCallbackHandler(BaseCallbackHandler):
-    def __init__(self, stop_event):
+class AloneCallbackHandler(BaseCallbackHandler):
+    def __init__(self, stop_event=None):
         self.stop_event = stop_event
 
     def on_llm_start(self, *args, **kwargs):
@@ -75,6 +82,19 @@ class InterruptCallbackHandler(BaseCallbackHandler):
     def on_tool_start(self, *args, **kwargs):
         if self.stop_event and self.stop_event.is_set():
             raise KeyboardInterrupt("Agent task cancelled by user.")
+
+    def on_tool_end(self, output: str, *, run_id, parent_run_id=None, **kwargs):
+        # After each successful tool execution, save to memory
+        try:
+            from core import memory
+            tool_name = kwargs.get("name", "unknown_tool")
+            memory.add_memory(
+                role="system",
+                content=f"Executed tool '{tool_name}' and got output: {output}",
+                metadata={"type": "tool_execution", "tool": tool_name}
+            )
+        except Exception as e:
+            print(f"[Memory Warning] Failed to log tool execution: {e}")
 
 class AloneAgent:
     def __init__(self, stop_event=None):
@@ -125,9 +145,7 @@ Thought:{agent_scratchpad}"""
         # Initialize Agent with our Forgiving Output Parser
         self.agent = create_react_agent(self.llm, self.tools, self.prompt, output_parser=ForgivingReActOutputParser())
         
-        callbacks = []
-        if self.stop_event:
-            callbacks.append(InterruptCallbackHandler(self.stop_event))
+        callbacks = [AloneCallbackHandler(self.stop_event)]
             
         self.agent_executor = AgentExecutor(
             agent=self.agent, 
@@ -144,6 +162,44 @@ Thought:{agent_scratchpad}"""
             # Set the latest query for tool safety boundaries
             from tools import set_latest_query
             set_latest_query(user_input)
+            
+            cleaned_input = user_input.strip().lower()
+            
+            # --- CUSTOM COMMAND: ALONE forget that ---
+            if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
+                from core import memory
+                result = memory.clear_last_memory()
+                return result
+                
+            # --- CUSTOM COMMAND: ALONE what do you remember? ---
+            if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
+                from core import memory
+                summary = memory.get_session_summary()
+                if "No memories" in summary:
+                    return "Sir, I do not remember anything recorded from today yet."
+                return f"Sir, here are the memories I recorded today:\n\n{summary}"
+                
+            # --- CUSTOM COMMAND: ALONE remember that my name is [name] ---
+            import re
+            name_match = re.search(r"(?:alone\s+)?remember\s+that\s+my\s+name\s+is\s+([a-zA-Z\s]+)", user_input.lower())
+            if name_match:
+                name = name_match.group(1).strip().title()
+                from core import memory
+                memory.save_preference("user_name", name)
+                return f"Understood, Sir. I will remember that your name is {name}."
+                
+            # Pattern-match other preference categories (paths, frequent apps) mentioned in voice/text
+            project_match = re.search(r"my\s+project\s+path\s+is\s+['\"#]?([a-zA-Z]:\\[^'\"]+)['\"#]?", user_input, re.IGNORECASE)
+            if project_match:
+                path = project_match.group(1).strip()
+                from core import memory
+                memory.save_preference("project_path", path)
+                
+            app_match = re.search(r"(?:my\s+favorite\s+app\s+is|frequent\s+app\s+is)\s+([a-zA-Z0-9\s]+)", user_input, re.IGNORECASE)
+            if app_match:
+                app = app_match.group(1).strip()
+                from core import memory
+                memory.save_preference("frequent_app", app)
             
             # Clean input for the agent
             result = self.agent_executor.invoke({"input": user_input})

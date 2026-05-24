@@ -1,6 +1,5 @@
 import yaml
-# pyrefly: ignore [missing-import]
-from ddgs import DDGS
+from duckduckgo_search import DDGS
 from langchain_ollama import ChatOllama
 from langchain.tools import tool
 
@@ -29,6 +28,19 @@ def search_web(query: str) -> str:
             f"{context}"
         )
         response = llm.invoke(prompt)
-        return response.content
+        summary = response.content
+        
+        # Save search query and summary to persistent memory
+        try:
+            from core import memory
+            memory.add_memory(
+                role="system",
+                content=f"Searched the web for '{query}' and found: {summary}",
+                metadata={"type": "web_search", "query": query}
+            )
+        except Exception as me:
+            print(f"[Memory Warning] Failed to log search to database: {me}")
+            
+        return summary
     except Exception as e:
         return f"Search failed: {e}"

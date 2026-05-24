@@ -113,9 +113,17 @@ class Brain:
         # Trim history if it exceeds max_history (keep last N messages)
         if len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
+            
+        # Retrieve context from past sessions using ChromaDB semantic search
+        from core import memory
+        past_context = memory.retrieve_context(user_message, top_k=3)
         
-        # Prepare messages for LLM (System Prompt + History)
-        messages = [SystemMessage(content=self.system_prompt)] + self.history
+        dynamic_system_prompt = self.system_prompt
+        if past_context:
+            dynamic_system_prompt += f"\n\nRelevant context from past sessions:\n{past_context}"
+        
+        # Prepare messages for LLM (Dynamic System Prompt + History)
+        messages = [SystemMessage(content=dynamic_system_prompt)] + self.history
         
         try:
             response = self.client.invoke(messages)
@@ -126,6 +134,10 @@ class Brain:
             
             # Persist history
             self._save_history()
+            
+            # Save the newly completed exchange to persistent ChromaDB memory
+            memory.add_memory("user", user_message)
+            memory.add_memory("assistant", ai_content)
             
             return ai_content
         except Exception as e:
