@@ -22,22 +22,34 @@ def handle_audio(audio_path):
         if not text or text.strip() == "":
             speak_async("I didn't catch that, Sir.")
             return
-        print(f"You (voice): {text}")
+        
+        # Clean wake word prefix if present (e.g. for VAD one-shot)
+        clean_text = text.strip()
+        wake_word_variants = ["hey alone", "hey_alone", "alone", "hay alone", "hey salon", "hey along", "hey high line", "hello alone", "hey a long", "hey low"]
+        for prefix in wake_word_variants:
+            if clean_text.lower().startswith(prefix):
+                clean_text = clean_text[len(prefix):].strip(", ")
+                break
+                
+        if not clean_text:
+            return
+            
+        print(f"You (voice): {clean_text}")
         
         # Check for cancel/stop keywords
-        if text.strip().lower() in ["stop", "cancel"]:
+        if clean_text.strip().lower() in ["stop", "cancel"]:
             speak_async("Understood, Sir. Cancelling.")
             return
         
         # Check for shutdown keywords
-        if text.strip().lower() in ["alone shutdown", 
-                                     "alone exit",
-                                     "goodbye alone"]:
+        if clean_text.strip().lower() in ["alone shutdown", 
+                                           "alone exit",
+                                           "goodbye alone"]:
             speak_async("Goodbye, Sir.")
             _shutdown_flag.set()
             return
         
-        result = run_agent(text)
+        result = run_agent(clean_text)
         speak_async(result)   # ✅ safe — background thread
     except Exception as e:
         print(f"[ALONE AUDIO CALLBACK ERROR] {e}")

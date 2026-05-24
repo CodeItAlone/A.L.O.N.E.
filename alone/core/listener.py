@@ -27,6 +27,7 @@ threshold = config.get('voice', {}).get('openwakeword_threshold', 0.5)
 ptt_mode = config.get('voice', {}).get('ptt_mode', False)
 energy_threshold = 200.0
 oww_model = None
+use_vad_listener = False
 
 # Wrapper to support PyAudio API style calling
 class SounddeviceStreamWrapper:
@@ -95,7 +96,20 @@ def calibrate_threshold(duration=1.5):
 
 def init_oww():
     """Initializes openWakeWord engine."""
-    global oww_model, ptt_mode
+    global oww_model, ptt_mode, use_vad_listener
+    
+    # List of built-in openwakeword models
+    builtin_models = ["alexa", "hey_jarvis", "hey_mycroft", "hey_rhasspy", "timer", "weather"]
+    
+    # Normalize keyword to check if it's a built-in
+    norm_keyword = keyword.lower().replace("_", " ")
+    is_builtin = any(b in norm_keyword for b in builtin_models)
+    
+    if not is_builtin:
+        print(f"[*] Custom wake word '{keyword}' configured. Using VAD-based Speech-To-Text wake word detector.")
+        use_vad_listener = True
+        return
+
     if not ptt_mode:
         print(f"[*] Initializing openWakeWord engine for model: '{keyword}'...")
         try:
@@ -106,8 +120,8 @@ def init_oww():
             print("[+] openWakeWord engine initialized successfully.")
         except Exception as e:
             print(f"[!] Failed to initialize openWakeWord: {e}")
-            print("[!] Switching default listening state to Push-To-Talk Fallback Mode.")
-            ptt_mode = True
+            print("[!] Switching default listening state to VAD-based Speech-To-Text wake word detector.")
+            use_vad_listener = True
 
 def _play_beep():
     """Plays a soft beep sound"""
@@ -154,6 +168,11 @@ def start_listening(callback):
 def _listen_loop(callback):
     global _stream, _listening, _paused
     
+    if use_vad_listener:
+        print("[*] Transitioning to VAD-based Speech-To-Text wake word detector...")
+        _vad_listen_loop(callback)
+        return
+        
     if ptt_mode or not oww_model:
         print("[*] Transitioning to Push-To-Talk Fallback Mode...")
         _ptt_loop(callback)
@@ -184,11 +203,6 @@ def _listen_loop(callback):
                     
                     rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
                     
-                    # openWakeWord is a stateful model that processes sliding windows of audio features.
-                    # Bypassing predict() during quiet/silent periods breaks its internal state tracking,
-                    # which prevents the wake word from ever being correctly recognized when speech starts.
-                    # We must feed all chunks continuously to maintain state, while we still use energy_threshold
-                    # elsewhere for silence detection during voice command recording.
                     prediction = oww_model.predict(audio_data)
                     prob = prediction.get(keyword, 0.0)
                     
@@ -224,6 +238,120 @@ def _listen_loop(callback):
     except Exception as e:
         print(f"[!] Microphone/Stream error: {e}")
         print("[*] Falling back to Push-To-Talk Mode due to stream failure...")
+        _ptt_loop(callback)
+
+def _vad_listen_loop(callback):
+    """
+    VAD-based Speech-To-Text wake word detector.
+    Listens continuously, records speech, transcribes, and triggers callback
+    if the wake word is spoken.
+    """
+    global _stream, _listening, _paused
+    
+    print(f"\n[*] ALONE: VAD continuous listening active. Say '{keyword.replace('_', ' ')}' to activate.")
+    chunk_len = 1280
+    
+    from core.transcriber import transcribe
+    
+    try:
+        while _listening:
+            if not _paused:
+                if _stream is None:
+                    try:
+                        time.sleep(0.4)
+                        raw_stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=chunk_len)
+                        _stream = SounddeviceStreamWrapper(raw_stream)
+                        raw_stream.start()
+                        print("[ALONE] Mic stream started successfully")
+                    except Exception as e:
+                        print(f"[ALONE] Failed to start mic stream (waiting for device release...): {e}")
+                        time.sleep(0.5)
+                        continue
+                
+                try:
+                    audio_chunk, overflow = _stream._stream.read(chunk_len)
+                    audio_data = audio_chunk.flatten()
+                    
+                    rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+                    
+                    # Detect speech onset when energy exceeds threshold
+                    if rms >= energy_threshold:
+                        print("\n[VAD] Voice detected, recording...")
+                        
+                        # Record the spoken phrase
+                        audio_path = _record_command(_stream._stream, max_duration=10, silence_timeout=1.5)
+                        if audio_path:
+                            # Transcribe the recorded speech
+                            text = transcribe(audio_path)
+                            print(f"[VAD] Transcribed: '{text}'")
+                            
+                            # Clean and normalize text
+                            cleaned_text = text.lower().strip(".,?! ")
+                            
+                            # Define variants of "hey alone" and "alone" for high-robustness wake word detection
+                            wake_word_variants = ["hey alone", "hey_alone", "alone", "hay alone", "hey salon", "hey along", "hey high line", "hello alone", "hey a long", "hey low"]
+                            
+                            detected = False
+                            matching_variant = ""
+                            for variant in wake_word_variants:
+                                if cleaned_text.startswith(variant) or f" {variant}" in cleaned_text:
+                                    detected = True
+                                    matching_variant = variant
+                                    break
+                            
+                            if detected:
+                                print(f"[!] Wake word detected via VAD! Matching phrase: '{matching_variant}'")
+                                _play_beep()
+                                
+                                # Check for one-shot command
+                                # Extract remaining text after the wake word
+                                remaining_text = ""
+                                idx = cleaned_text.find(matching_variant)
+                                if idx != -1:
+                                    remaining_text = cleaned_text[idx + len(matching_variant):].strip(", ")
+                                
+                                if remaining_text and len(remaining_text) > 1:
+                                    print(f"[VAD] One-shot command detected: '{remaining_text}'")
+                                    # Pass the audio path to the callback to run the workflow directly
+                                    callback(audio_path)
+                                else:
+                                    # Standard wake-word trigger (just the wake word was said)
+                                    print("ALONE: [Listening for command...]")
+                                    # Record the actual command
+                                    cmd_audio_path = _record_command(_stream._stream, max_duration=8, silence_timeout=1.5)
+                                    if cmd_audio_path:
+                                        callback(cmd_audio_path)
+                                    else:
+                                        print("[VAD] No command detected.")
+                            else:
+                                # Not our wake word, clean up the temp file
+                                try:
+                                    if os.path.exists(audio_path):
+                                        os.remove(audio_path)
+                                except Exception:
+                                    pass
+                                print(f"[*] ALONE: Awaiting '{keyword.replace('_', ' ')}'...")
+                except Exception as ex:
+                    print(f"[!] InputStream read error (closing stream): {ex}")
+                    try:
+                        if _stream:
+                            _stream.close()
+                    except Exception:
+                        pass
+                    _stream = None
+                    time.sleep(0.1)
+            else:
+                if _stream:
+                    try:
+                        _stream.close()
+                    except Exception:
+                        pass
+                    _stream = None
+                    print("[ALONE] Mic stream closed")
+                time.sleep(0.05)
+    except Exception as e:
+        print(f"[!] VAD listener error: {e}")
+        print("[*] Falling back to Push-To-Talk Mode...")
         _ptt_loop(callback)
 
 

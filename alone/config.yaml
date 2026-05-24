@@ -9,7 +9,7 @@ voice:
   rate: 175
   volume: 1.0
   voice_index: 0
-  wake_word: "hey_jarvis"
+  wake_word: "hey_alone"
   openwakeword_threshold: 0.5
   ptt_mode: false
 
