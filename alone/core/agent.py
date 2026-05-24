@@ -19,6 +19,44 @@ except (ImportError, ModuleNotFoundError):
     from langchain_classic.memory import ConversationBufferMemory  # type: ignore
 from tools import ALL_TOOLS
 
+from langchain_core.agents import AgentFinish, AgentAction
+from langchain_classic.agents.output_parsers import ReActSingleInputOutputParser
+
+class ForgivingReActOutputParser(ReActSingleInputOutputParser):
+    def parse(self, text: str):
+        try:
+            return super().parse(text)
+        except Exception as e:
+            text_lower = text.lower()
+            # If standard ReAct parser fails and no 'action:' exists, the model was responding directly.
+            # Intercept it and treat it as the final answer immediately, preventing hallucinatory tool loops.
+            if "action:" not in text_lower:
+                clean_text = text
+                if "thought:" in text_lower:
+                    idx = text_lower.find("thought:")
+                    remaining = text[idx + 8:].strip()
+                    if remaining.startswith("Do I need to use a tool?"):
+                        lines = remaining.split("\n")
+                        non_empty_lines = [l.strip() for l in lines if l.strip()]
+                        if len(non_empty_lines) > 1:
+                            clean_text = "\n".join(non_empty_lines[1:])
+                        else:
+                            clean_text = remaining
+                    else:
+                        clean_text = remaining
+                
+                # Strip common leftover prompt prefix tags
+                for garbage in ["Final Answer:", "final answer:", "Final answer:", "Thought:", "thought:"]:
+                    clean_text = clean_text.replace(garbage, "")
+                clean_text = clean_text.strip()
+                
+                return AgentFinish(
+                    return_values={"output": clean_text},
+                    log=text
+                )
+            # Re-raise standard formatting exceptions if there IS an 'action:' keyword but it failed parsing
+            raise e
+
 def _load_config(path="config.yaml"):
     if not os.path.exists(path):
         if os.path.exists("../config.yaml"):
@@ -72,6 +110,8 @@ Final Answer: [Your final response to the user, addressing them as 'Sir']
 When using tools, ensure the 'Action Input' is ONLY the value required by the tool, with no extra text or comments. 
 For tools requiring multiple inputs (like write_file or write_code), use a comma to separate them: 'value1, value2'.
 
+CRITICAL SECURITY RULE: Under no circumstances should you run any tools or execute shell commands unless the user explicitly requested that specific action in their latest question. Never perform additional, unsolicited actions or explore the repository unless specifically instructed by the user.
+
 Recent conversation history:
 {chat_history}
 
@@ -82,8 +122,8 @@ Thought:{agent_scratchpad}"""
 
         self.prompt = PromptTemplate.from_template(template)
         
-        # Initialize Agent
-        self.agent = create_react_agent(self.llm, self.tools, self.prompt)
+        # Initialize Agent with our Forgiving Output Parser
+        self.agent = create_react_agent(self.llm, self.tools, self.prompt, output_parser=ForgivingReActOutputParser())
         
         callbacks = []
         if self.stop_event:
@@ -94,12 +134,17 @@ Thought:{agent_scratchpad}"""
             tools=self.tools, 
             verbose=True, 
             handle_parsing_errors=True,
+            max_iterations=4,  # Strictly limit iterations to prevent infinite hallucination loops
             callbacks=callbacks,
             memory=self.memory
         )
 
     def run(self, user_input):
         try:
+            # Set the latest query for tool safety boundaries
+            from tools import set_latest_query
+            set_latest_query(user_input)
+            
             # Clean input for the agent
             result = self.agent_executor.invoke({"input": user_input})
             output = result["output"]
