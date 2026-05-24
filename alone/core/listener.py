@@ -184,11 +184,13 @@ def _listen_loop(callback):
                     
                     rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
                     
-                    if rms < energy_threshold:
-                        prob = 0.0
-                    else:
-                        prediction = oww_model.predict(audio_data)
-                        prob = prediction.get(keyword, 0.0)
+                    # openWakeWord is a stateful model that processes sliding windows of audio features.
+                    # Bypassing predict() during quiet/silent periods breaks its internal state tracking,
+                    # which prevents the wake word from ever being correctly recognized when speech starts.
+                    # We must feed all chunks continuously to maintain state, while we still use energy_threshold
+                    # elsewhere for silence detection during voice command recording.
+                    prediction = oww_model.predict(audio_data)
+                    prob = prediction.get(keyword, 0.0)
                     
                     if prob >= threshold:
                         print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")

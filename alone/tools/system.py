@@ -4,12 +4,14 @@ import platform
 import pyautogui
 from langchain.tools import tool
 
+from .browser import sanitize_tool_input
+
 @tool
 def open_app(app_name: str) -> str:
     """Opens an application using subprocess. Handle system-specific commands."""
     system = platform.system()
-    app_name = app_name.strip("'\"")
     try:
+        app_name = sanitize_tool_input(app_name)
         if system == "Windows":
             # Try to start the process. For common apps, just use start.
             subprocess.Popen(["start", "", app_name], shell=True)
@@ -20,6 +22,7 @@ def open_app(app_name: str) -> str:
         return f"Attempted to open {app_name}."
     except Exception as e:
         return f"Failed to open {app_name}: {e}"
+
 
 @tool
 def open_file(file_path: str) -> str:
