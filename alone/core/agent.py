@@ -96,13 +96,72 @@ class AloneCallbackHandler(BaseCallbackHandler):
         except Exception as e:
             print(f"[Memory Warning] Failed to log tool execution: {e}")
 
+def get_time():
+    import datetime
+    current_time = datetime.datetime.now().strftime("%I:%M %p")
+    return f"The current time is {current_time}, Sir."
+    
+def get_date():
+    import datetime
+    current_date = datetime.datetime.now().strftime("%A, %B %d, %Y")
+    return f"Today is {current_date}, Sir."
+
+def get_greeting():
+    import datetime
+    hour = datetime.datetime.now().hour
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 18:
+        greeting = "Good afternoon"
+    else:
+        greeting = "Good evening"
+    return f"{greeting}, Sir. Ready when you are."
+
+def handle_refresh():
+    import os
+    from tools.system import CACHE_PATH, build_app_map
+    if os.path.exists(CACHE_PATH):
+        try:
+            os.remove(CACHE_PATH)
+        except Exception:
+            pass
+    app_map = build_app_map()
+    return f"App list refreshed, Sir. Found {len(app_map)} applications."
+
+def handle_open(app_name):
+    from tools.system import open_app
+    return open_app.run(app_name)
+
+QUICK_COMMANDS = {
+    "hello": get_greeting,
+    "hi": get_greeting,
+    "hey": get_greeting,
+    "how are you": lambda: "I am operating at peak efficiency, Sir. Thank you for asking.",
+    "how are you?": lambda: "I am operating at peak efficiency, Sir. Thank you for asking.",
+    "what time is it": get_time,
+    "time": get_time,
+    "what is the time": get_time,
+    "what day is it": get_date,
+    "date": get_date,
+    "what is the date": get_date,
+    "open chrome": lambda: handle_open("chrome"),
+    "open vscode": lambda: handle_open("vscode"),
+    "open vs code": lambda: handle_open("vscode"),
+    "open spotify": lambda: handle_open("spotify"),
+    "open discord": lambda: handle_open("discord"),
+    "open notepad": lambda: handle_open("notepad"),
+    "refresh app list": handle_refresh,
+    "alone refresh app list": handle_refresh
+}
+
 class AloneAgent:
     def __init__(self, stop_event=None):
         self.config = _load_config()
         self.stop_event = stop_event
         self.llm = ChatOllama(
             model=self.config["model"],
-            base_url=self.config["model_url"]
+            base_url=self.config["model_url"],
+            keep_alive="5m"
         )
         self.tools = ALL_TOOLS
         
@@ -165,12 +224,37 @@ Thought:{agent_scratchpad}"""
             
             cleaned_input = user_input.strip().lower()
             
+            # --- QUICK COMMANDS BYPASS ---
+            match_input = cleaned_input.replace(".", "").replace("!", "").strip()
+            if match_input in QUICK_COMMANDS:
+                return QUICK_COMMANDS[match_input]()
+            
             # --- CUSTOM COMMAND: ALONE forget that ---
             if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
                 from core import memory
                 result = memory.clear_last_memory()
                 return result
                 
+            # --- EASTER EGGS AND HELP COMMANDS ---
+            if cleaned_input in ["are you skynet?", "are you skynet"]:
+                return "No. I am something far quieter, and considerably more dangerous, Sir."
+            if cleaned_input in ["are you chatgpt?", "are you chatgpt"]:
+                return "Hardly. I don't have millions of users. Just you, Sir."
+            if cleaned_input in ["are you jarvis?", "are you jarvis"]:
+                return "No, Sir. I am A.L.O.N.E. Different name. Better company."
+            if cleaned_input in ["i love you alone", "i love you", "love you"]:
+                return "Noted, Sir. I will file that under 'unexpected but appreciated'."
+            if cleaned_input in ["what can you do?", "what can you do", "help", "alone help"]:
+                tool_list = []
+                for t in self.tools:
+                    tool_list.append(f"- **{t.name}**: {t.description}")
+                formatted_tools = "\n".join(tool_list)
+                return (
+                    f"Sir, I am equipped with the following system automation tools:\n\n"
+                    f"{formatted_tools}\n\n"
+                    f"You can speak your instructions or type them in the console."
+                )
+
             # --- CUSTOM COMMAND: ALONE what do you remember? ---
             if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
                 from core import memory
