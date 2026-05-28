@@ -1,17 +1,18 @@
 import yaml
-from duckduckgo_search import DDGS
-from langchain_ollama import ChatOllama
-from langchain.tools import tool
+
+from duckduckgo_search import DDGS  # type: ignore
+from langchain_ollama import ChatOllama  # type: ignore
+from langchain.tools import tool  # type: ignore
 
 def _get_llm():
     config_path = "config.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    return ChatOllama(model=config["model"], base_url=config["model_url"])
+    return ChatOllama(model=config["model"], base_url=config["model_url"], keep_alive="5m")
 
 @tool
 def search_web(query: str) -> str:
-    """Searches the web using DuckDuckGo and returns a summary of the top 5 results."""
+    """Searches the web using DuckDuckGo and returns a summary. Trigger this tool for questions about current events, real-time or post-2023 information, news, up-to-date facts, or facts you do not know."""
     try:
         results = []
         with DDGS() as ddgs:
