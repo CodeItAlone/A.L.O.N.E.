@@ -2,8 +2,8 @@ import os
 import uuid
 import time
 from datetime import datetime
-import chromadb
-from chromadb import EmbeddingFunction, Documents, Embeddings
+import chromadb  # type: ignore
+from chromadb import EmbeddingFunction, Documents, Embeddings  # type: ignore
 
 # Persistent storage paths
 db_path = os.path.expanduser("~/.alone/memory")
@@ -12,7 +12,7 @@ os.makedirs(db_path, exist_ok=True)
 # Custom Local Embedding Function using sentence-transformers
 class LocalEmbeddingFunction(EmbeddingFunction):
     def __init__(self, model_name="all-MiniLM-L6-v2"):
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer  # type: ignore
         # Disable tokenizers warning
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         print(f"[*] Loading local SentenceTransformer model '{model_name}' (approx. 80MB)...")
