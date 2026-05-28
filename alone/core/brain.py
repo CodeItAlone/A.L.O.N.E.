@@ -14,18 +14,19 @@ class Brain:
         # Initialize Ollama client
         self.client = ChatOllama(
             model=self.config["model"],
-            base_url=self.config["model_url"]
+            base_url=self.config["model_url"],
+            keep_alive="5m"
         )
         
         # ALONE System Prompt
-        self.system_prompt = (
+        self.system_prompt = self.config.get("system_prompt", (
             "You are A.L.O.N.E., a highly intelligent, witty, and "
             "efficient AI personal assistant running locally on the "
             "user's laptop. You are concise, sharp, and always address "
             "the user as 'Sir'. You have a dry, calm, and composed "
             "personality. Never say you are an AI language model. "
             "You are ALONE."
-        )
+        ))
         
         # Load or initialize history
         self.history = self._load_history()
@@ -74,8 +75,6 @@ class Brain:
             
             # Check if model exists
             model_name = self.config["model"]
-            # The ollama-python library returns a ModelList object with a 'models' attribute
-            # Each model object has a 'model' attribute containing its name
             model_exists = False
             exact_model_name = None
             if hasattr(response, 'models'):
@@ -92,9 +91,40 @@ class Brain:
                         break
             
             if not model_exists:
-                print(f"[!] Model '{model_name}' not found. Attempting to pull...")
-                ollama_client.pull(model_name)
-                print(f"[+] Model '{model_name}' pulled successfully.")
+                if model_name == "alone-model":
+                    print("[!] Custom model 'alone-model' not found. Self-healing/compilation triggered...")
+                    # 1. Check if base model llama3.2:3b exists
+                    base_model = "llama3.2:3b"
+                    base_exists = False
+                    for m in response.models:
+                        if m.model == base_model or m.model == f"{base_model}:latest":
+                            base_exists = True
+                            break
+                    if not base_exists:
+                        print(f"[*] Base model '{base_model}' not found. Pulling it first...")
+                        ollama_client.pull(base_model)
+                        print(f"[+] Base model '{base_model}' pulled successfully.")
+                    
+                    # 2. Check if Modelfile exists, if not write it
+                    modelfile_path = "Modelfile"
+                    if not os.path.exists(modelfile_path):
+                        if os.path.exists("../Modelfile"):
+                            modelfile_path = "../Modelfile"
+                        else:
+                            with open(modelfile_path, "w") as f:
+                                f.write("FROM llama3.2:3b\nPARAMETER num_gpu 20\nPARAMETER num_thread 6\n")
+                    
+                    # 3. Create the model
+                    print("[*] Creating local model 'alone-model' from Modelfile...")
+                    import subprocess
+                    subprocess.run(["ollama", "create", "alone-model", "-f", modelfile_path], check=True)
+                    print("[+] Custom 'alone-model' created successfully.")
+                    self.config["model"] = "alone-model"
+                    self.client.model = "alone-model"
+                else:
+                    print(f"[!] Model '{model_name}' not found. Attempting to pull...")
+                    ollama_client.pull(model_name)
+                    print(f"[+] Model '{model_name}' pulled successfully.")
             else:
                 # Update the chat client with the exact model name found
                 self.config["model"] = exact_model_name
@@ -131,6 +161,10 @@ class Brain:
             
             # Append AI response to history
             self.history.append(AIMessage(content=ai_content))
+            
+            # Trim history if it exceeds max_history (keep last N messages)
+            if len(self.history) > self.max_history:
+                self.history = self.history[-self.max_history:]
             
             # Persist history
             self._save_history()
