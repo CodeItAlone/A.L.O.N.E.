@@ -9,7 +9,7 @@ def _get_llm():
     config_path = "config.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    return ChatOllama(model=config["model"], base_url=config["model_url"])
+    return ChatOllama(model=config["model"], base_url=config["model_url"], keep_alive="5m")
 
 @tool
 def write_code(input_str: str) -> str:
