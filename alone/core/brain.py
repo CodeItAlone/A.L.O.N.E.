@@ -15,7 +15,7 @@ class Brain:
         self.client = ChatOllama(
             model=self.config["model"],
             base_url=self.config["model_url"],
-            keep_alive="5m"
+            keep_alive="60m"
         )
         
         # ALONE System Prompt

@@ -132,26 +132,37 @@ def handle_open(app_name):
     from tools.system import open_app
     return open_app.run(app_name)
 
+from datetime import datetime
+import webbrowser
+from tools.system import open_app, take_screenshot
+from core import memory
+
 QUICK_COMMANDS = {
-    "hello": get_greeting,
-    "hi": get_greeting,
-    "hey": get_greeting,
-    "how are you": lambda: "I am operating at peak efficiency, Sir. Thank you for asking.",
-    "how are you?": lambda: "I am operating at peak efficiency, Sir. Thank you for asking.",
-    "what time is it": get_time,
-    "time": get_time,
-    "what is the time": get_time,
-    "what day is it": get_date,
-    "date": get_date,
-    "what is the date": get_date,
-    "open chrome": lambda: handle_open("chrome"),
-    "open vscode": lambda: handle_open("vscode"),
-    "open vs code": lambda: handle_open("vscode"),
-    "open spotify": lambda: handle_open("spotify"),
-    "open discord": lambda: handle_open("discord"),
-    "open notepad": lambda: handle_open("notepad"),
-    "refresh app list": handle_refresh,
-    "alone refresh app list": handle_refresh
+    "what time is it":
+        lambda: f"It's {datetime.now().strftime('%I:%M %p')}, Sir.",
+    "what is the date":
+        lambda: f"Today is {datetime.now().strftime('%A, %B %d %Y')}, Sir.",
+    "what day is it":
+        lambda: f"Today is {datetime.now().strftime('%A')}, Sir.",
+    "open youtube":
+        lambda: (webbrowser.open("https://youtube.com"),
+                 "Opening YouTube, Sir.")[1],
+    "open github":
+        lambda: (webbrowser.open("https://github.com"),
+                 "Opening GitHub, Sir.")[1],
+    "open google":
+        lambda: (webbrowser.open("https://google.com"),
+                 "Opening Google, Sir.")[1],
+    "open vs code":
+        lambda: (open_app.run("vscode"),
+                 "Opening VS Code, Sir.")[1],
+    "take a screenshot":
+        lambda: take_screenshot.run("screenshot.png"),
+    "what is my name":
+        lambda: memory.get_preference("user_name") or
+                "I don't know your name yet, Sir.",
+    "stop": lambda: "Understood, Sir.",
+    "cancel": lambda: "Cancelled, Sir.",
 }
 
 class AloneAgent:
@@ -161,7 +172,7 @@ class AloneAgent:
         self.llm = ChatOllama(
             model=self.config["model"],
             base_url=self.config["model_url"],
-            keep_alive="5m"
+            keep_alive="60m"
         )
         self.tools = ALL_TOOLS
         
@@ -225,9 +236,10 @@ Thought:{agent_scratchpad}"""
             cleaned_input = user_input.strip().lower()
             
             # --- QUICK COMMANDS BYPASS ---
-            match_input = cleaned_input.replace(".", "").replace("!", "").strip()
-            if match_input in QUICK_COMMANDS:
-                return QUICK_COMMANDS[match_input]()
+            key = cleaned_input.rstrip("?.!")
+            if key in QUICK_COMMANDS:
+                print(f"[ALONE] Quick command: {key}")
+                return QUICK_COMMANDS[key]()
             
             # --- CUSTOM COMMAND: ALONE forget that ---
             if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
