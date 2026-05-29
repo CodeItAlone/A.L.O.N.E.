@@ -41,6 +41,8 @@ def handle_audio(audio_path):
                 pass
             return
         
+        print(f"You: {text}")
+        
         # Clean wake word prefix if present (e.g. for VAD one-shot)
         clean_text = text.strip()
         wake_word_variants = ["hey alone", "hey_alone", "alone", "hay alone", "hey salon", "hey along", "hey high line", "hello alone", "hey a long", "hey low", "hey_jarvis", "hey jarvis"]
@@ -56,8 +58,6 @@ def handle_audio(audio_path):
             except Exception:
                 pass
             return
-            
-        print(f"You (voice): {clean_text}")
         
         # Update user bubble in GUI
         try:
@@ -65,6 +65,13 @@ def handle_audio(audio_path):
             signals.user_command_received.emit(clean_text)
         except Exception:
             pass
+        
+        # Check quick commands first
+        from core.agent import QUICK_COMMANDS
+        key = clean_text.lower().strip().rstrip("?.!")
+        if key not in QUICK_COMMANDS:
+            # Only say "on it" for complex commands
+            speak_async("On it, Sir.")
         
         # Check for cancel/stop keywords
         if clean_text.strip().lower() in ["stop", "cancel"]:
@@ -89,14 +96,15 @@ def handle_audio(audio_path):
             return
         
         result = run_agent(clean_text)
-        response_text = ""
+        
+        # Always speak the result
         if isinstance(result, dict):
-            response_text = result.get("output", result.get("response", str(result)))
-        elif isinstance(result, str):
-            response_text = result
+            output = result.get("output", result.get("response", str(result)))
+        else:
+            output = str(result)
             
-        if response_text:
-            speak_async(response_text)   # safe background queueing
+        if output:
+            speak_async(output)
     except Exception as e:
         print(f"[ALONE AUDIO CALLBACK ERROR] {e}")
         try:
@@ -207,6 +215,14 @@ def main():
     from PyQt5.QtCore import QTimer
     from ui.window import AloneHUDWindow, signals
     from ui.settings import AloneSettingsWindow
+    from core.preloader import prewarm, wait_until_ready
+    
+    # Fire prewarm immediately
+    threading.Thread(
+        target=prewarm,
+        daemon=True,
+        name="Prewarmer"
+    ).start()
     
     app = QApplication(sys.argv)
     
@@ -217,20 +233,14 @@ def main():
     settings_win = AloneSettingsWindow(hud)
     signals.open_settings.connect(settings_win.show)
     
-    # 3. Queue the startup phrase with time-awareness
-    startup_msg = "A.L.O.N.E. online. Ready when you are, Sir."
-    try:
-        hour = datetime.now().hour
-        if 6 <= hour < 12:
-            startup_msg = "Good morning, Sir. Systems online."
-        elif 12 <= hour < 18:
-            startup_msg = "Good afternoon, Sir. Ready when you are."
-        else:
-            startup_msg = "Good evening, Sir. All systems nominal."
-    except Exception as e:
-        print(f"[Warning] Failed to select startup phrase: {e}")
-        
-    speak_async(startup_msg)
+    # Speak while warming — user knows it is starting
+    speak("A.L.O.N.E. initializing. One moment please, Sir.")
+    
+    # Wait max 2 minutes for all models to load
+    if wait_until_ready(timeout=120):
+        speak("All systems online. Good day, Sir.")
+    else:
+        speak("Partially initialized. Some systems may be slow, Sir.")
     
     # 4. Bind the speech queue drain process to a main thread QTimer (avoids COM errors)
     def speech_timer_tick():

@@ -85,17 +85,46 @@ def get_transcriber(config):
 _transcriber_instance = None
 
 def transcribe(audio_path):
-    global _transcriber_instance
-    if _transcriber_instance is None:
+    from core.preloader import get_whisper_model
+    model = get_whisper_model()
+    if model is None:
+        # Fallback: load fresh if prewarm failed
+        from faster_whisper import WhisperModel
         import yaml
-        def _load_config(path="config.yaml"):
-            import os
-            if not os.path.exists(path):
-                if os.path.exists("../config.yaml"):
-                    path = "../config.yaml"
-            with open(path, "r") as f:
-                return yaml.safe_load(f)
-        config = _load_config()
-        _transcriber_instance = get_transcriber(config)
-    return _transcriber_instance.transcribe(audio_path)
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(base_dir, "config.yaml")
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+        whisper_cfg = config.get("whisper", {})
+        device = whisper_cfg.get("device", "cpu")
+        compute_type = whisper_cfg.get("compute_type", "int8")
+        
+        # Dynamically register CUDA paths to environment for faster_whisper if on cuda
+        if device == "cuda":
+            cuda_paths = [
+                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin",
+                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.3\bin",
+                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin",
+                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin",
+                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin",
+                r"C:\Program Files\NVIDIA\CUDNN\v9.0\bin",
+                r"C:\Program Files\NVIDIA\CUDNN\v8.9\bin"
+            ]
+            for path in cuda_paths:
+                if os.path.exists(path) and path not in os.environ["PATH"]:
+                    os.environ["PATH"] += os.pathsep + path
+                    print(f"[*] Dynamically registered CUDA path: {path}")
+
+        model = WhisperModel(
+            whisper_cfg.get("model_size", "base.en"),
+            device=device,
+            compute_type=compute_type
+        )
+    segments, _ = model.transcribe(
+        audio_path,
+        language="en",
+        vad_filter=True
+    )
+    return " ".join([s.text for s in segments]).strip()
 
