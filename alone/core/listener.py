@@ -8,66 +8,30 @@ import sounddevice as sd
 import yaml
 from openwakeword.model import Model
 
+# Try importing webrtcvad
+try:
+    import webrtcvad
+    _has_webrtcvad = True
+except ImportError:
+    _has_webrtcvad = False
+
 _stream = None
 _paused = False
 _listening = True
 
 # Load config
 def _load_config(path="config.yaml"):
-    if not os.path.exists(path):
-        if os.path.exists("../config.yaml"):
-            path = "../config.yaml"
-    with open(path, "r") as f:
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(base_dir, "config.yaml")
+    if not os.path.exists(config_path):
+        config_path = "config.yaml"
+    with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
 config = _load_config()
 sample_rate = 16000
-keyword = config.get('voice', {}).get('wake_word', "hey_jarvis")
-threshold = config.get('voice', {}).get('openwakeword_threshold', 0.5)
-ptt_mode = config.get('voice', {}).get('ptt_mode', False)
 energy_threshold = 200.0
 oww_model = None
-use_vad_listener = False
-
-# Wrapper to support PyAudio API style calling
-class SounddeviceStreamWrapper:
-    def __init__(self, stream):
-        self._stream = stream
-    
-    def is_active(self):
-        return self._stream.active
-        
-    def stop_stream(self):
-        self._stream.stop()
-        
-    def start_stream(self):
-        self._stream.start()
-        
-    def close(self):
-        self._stream.close()
-        
-    def read(self, frames):
-        return self._stream.read(frames)
-
-def check_enter_pressed():
-    """Non-blocking check to see if ENTER was pressed in the console."""
-    try:
-        import msvcrt
-        if msvcrt.kbhit():
-            is_enter = False
-            while msvcrt.kbhit():
-                ch = msvcrt.getch()
-                if ch in (b'\r', b'\n'):
-                    is_enter = True
-            return is_enter
-    except ImportError:
-        import sys
-        import select
-        r, _, _ = select.select([sys.stdin], [], [], 0.0)
-        if r:
-            sys.stdin.readline() # Consume the entered text
-            return True
-    return False
 
 def calibrate_threshold(duration=1.5):
     """Automatically calibrates energy threshold based on ambient room noise."""
@@ -84,7 +48,6 @@ def calibrate_threshold(duration=1.5):
         if rms_values:
             mean_rms = np.mean(rms_values)
             max_rms = np.max(rms_values)
-            # Cap the threshold to a maximum of 800.0 to prevent noise spikes from blocking speech recognition
             energy_threshold = min(max(mean_rms * 1.5, max_rms * 1.2, 100.0), 800.0)
             print(f"[+] Calibration complete. Set Energy Threshold: {energy_threshold:.2f}")
         else:
@@ -94,34 +57,50 @@ def calibrate_threshold(duration=1.5):
         energy_threshold = 200.0
         print(f"[!] Dynamic calibration failed ({e}). Using default energy threshold: {energy_threshold}")
 
-def init_oww():
-    """Initializes openWakeWord engine."""
-    global oww_model, ptt_mode, use_vad_listener
+def load_wakeword_model():
+    """Initializes openWakeWord engine with custom or fallback model."""
+    global oww_model
+    if oww_model is not None:
+        return oww_model
+        
+    cfg = _load_config()
+    ww_cfg = cfg.get("wake_word", {})
+    model_path = ww_cfg.get("model_path", "data/hey_alone.tflite")
+    fallback_model = ww_cfg.get("fallback_model", "hey_jarvis")
     
-    # List of built-in openwakeword models
-    builtin_models = ["alexa", "hey_jarvis", "hey_mycroft", "hey_rhasspy", "timer", "weather"]
-    
-    # Normalize keyword to check if it's a built-in
-    norm_keyword = keyword.lower().replace("_", " ")
-    is_builtin = any(b in norm_keyword for b in builtin_models)
-    
-    if not is_builtin:
-        print(f"[*] Custom wake word '{keyword}' configured. Using VAD-based Speech-To-Text wake word detector.")
-        use_vad_listener = True
-        return
-
-    if not ptt_mode:
-        print(f"[*] Initializing openWakeWord engine for model: '{keyword}'...")
+    resolved_path = None
+    paths_to_try = [
+        model_path,
+        os.path.join("alone", model_path) if not model_path.startswith("alone") else model_path,
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), model_path),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "hey_alone.tflite")
+    ]
+    for p in paths_to_try:
+        if p and os.path.exists(p):
+            resolved_path = p
+            break
+            
+    if resolved_path:
+        print(f"[ALONE] Loading custom wake word model from: {resolved_path}")
         try:
             oww_model = Model(
-                wakeword_models=[keyword],
+                wakeword_models=[resolved_path],
                 inference_framework="onnx"
             )
-            print("[+] openWakeWord engine initialized successfully.")
         except Exception as e:
-            print(f"[!] Failed to initialize openWakeWord: {e}")
-            print("[!] Switching default listening state to VAD-based Speech-To-Text wake word detector.")
-            use_vad_listener = True
+            print(f"[ALONE] Failed to load custom model: {e}. Using fallback.")
+            
+    if oww_model is None:
+        print(f"[ALONE] Loading fallback wake word model: {fallback_model}")
+        try:
+            oww_model = Model(
+                wakeword_models=[fallback_model],
+                inference_framework="onnx"
+            )
+        except Exception as e:
+            print(f"[ALONE] Critical: Failed to load fallback model: {e}")
+            
+    return oww_model
 
 def _play_beep():
     """Plays a soft beep sound"""
@@ -155,12 +134,110 @@ def stop_listening():
     except Exception as e:
         print(f"[ALONE] Exception in stop_listening: {e}")
 
+def record_until_silence():
+    """Records audio from microphone using dynamic VAD configurations."""
+    global _listening, _paused
+    
+    cfg = _load_config()
+    vad_cfg = cfg.get("vad", {})
+    vad_mode = vad_cfg.get("mode", 2)
+    max_silent_frames = vad_cfg.get("max_silent_frames", 20)
+    max_total_frames = vad_cfg.get("max_total_frames", 300)
+    
+    vad = None
+    if _has_webrtcvad:
+        try:
+            import webrtcvad
+            vad = webrtcvad.Vad(vad_mode)
+            print(f"[ALONE] webrtcvad initialized with mode {vad_mode}")
+        except Exception as e:
+            print(f"[ALONE] Failed to init webrtcvad: {e}. Falling back to energy VAD.")
+            
+    print("[ALONE] Listening for command...")
+    
+    frame_size = 480  # 30ms at 16kHz
+    frames = []
+    ring_buffer = [False] * 10
+    speech_detected = False
+    silent_frames = 0
+    total_frames = 0
+    
+    try:
+        with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=frame_size) as stream:
+            while total_frames < max_total_frames and _listening:
+                if _paused:
+                    time.sleep(0.01)
+                    continue
+                    
+                audio_chunk, overflow = stream.read(frame_size)
+                audio_data = audio_chunk.flatten()
+                frames.append(audio_data.copy())
+                total_frames += 1
+                
+                # Check speech flag
+                is_speech = False
+                if vad is not None:
+                    try:
+                        is_speech = vad.is_speech(audio_data.tobytes(), sample_rate)
+                    except Exception:
+                        rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+                        is_speech = rms >= energy_threshold
+                else:
+                    rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+                    is_speech = rms >= energy_threshold
+                
+                # Update ring buffer
+                ring_buffer.pop(0)
+                ring_buffer.append(is_speech)
+                
+                # Check for start
+                if not speech_detected:
+                    if sum(ring_buffer) >= 3:
+                        speech_detected = True
+                        print("[ALONE] Speech detected... 🎤")
+                        try:
+                            from ui.window import signals
+                            signals.status_changed.emit("RECORDING")
+                        except Exception:
+                            pass
+                else:
+                    # Check for end
+                    if not is_speech:
+                        silent_frames += 1
+                    else:
+                        silent_frames = 0
+                        
+                    if silent_frames >= max_silent_frames:
+                        print("[ALONE] Speech ended ✅")
+                        break
+                        
+            if total_frames >= max_total_frames:
+                print("[ALONE] Max time reached, processing...")
+                
+    except Exception as e:
+        print(f"[ALONE] Error recording command: {e}")
+        
+    if not frames:
+        return None
+        
+    temp_path = os.path.join(tempfile.gettempdir(), f"alone_cmd_{int(time.time())}.wav")
+    try:
+        with wave.open(temp_path, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(np.concatenate(frames).tobytes())
+        return temp_path
+    except Exception as e:
+        print(f"[ALONE] Failed to save command audio: {e}")
+        return None
+
 def start_listening(callback):
-    """Starts/runs the background listening process"""
+    """Starts/runs the background listening process."""
     global _listening
     _listening = True
     
-    init_oww()
+    load_wakeword_model()
     calibrate_threshold()
     
     _listen_loop(callback)
@@ -168,57 +245,63 @@ def start_listening(callback):
 def _listen_loop(callback):
     global _stream, _listening, _paused
     
-    if use_vad_listener:
-        print("[*] Transitioning to VAD-based Speech-To-Text wake word detector...")
-        _vad_listen_loop(callback)
-        return
-        
-    if ptt_mode or not oww_model:
-        print("[*] Transitioning to Push-To-Talk Fallback Mode...")
-        _ptt_loop(callback)
-        return
-
-    print(f"\n[*] ALONE: Continuous Listening active. Say '{keyword}' to activate.")
-    chunk_len = 1280  # openWakeWord expects 1280 samples chunk at 16kHz
+    cfg = _load_config()
+    ww_cfg = cfg.get("wake_word", {})
+    threshold = ww_cfg.get("threshold", 0.5)
+    chunk_len = ww_cfg.get("chunk_size", 1280)
+    
+    print("\n[*] ALONE: Continuous Listening active. Say wake word to activate.")
     
     try:
         while _listening:
             if not _paused:
                 if _stream is None:
                     try:
-                        # Let Windows release audio device from any previous playback first
                         time.sleep(0.4)
-                        raw_stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=chunk_len)
-                        _stream = SounddeviceStreamWrapper(raw_stream)
-                        raw_stream.start()
+                        _stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=chunk_len)
+                        _stream.start()
                         print("[ALONE] Mic stream started successfully")
                     except Exception as e:
-                        print(f"[ALONE] Failed to start mic stream (waiting for device release...): {e}")
+                        print(f"[ALONE] Failed to start mic stream: {e}")
                         time.sleep(0.5)
                         continue
                 
                 try:
-                    audio_chunk, overflow = _stream._stream.read(chunk_len)
+                    audio_chunk, overflow = _stream.read(chunk_len)
                     audio_data = audio_chunk.flatten()
                     
-                    rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-                    
-                    prediction = oww_model.predict(audio_data)
-                    prob = prediction.get(keyword, 0.0)
-                    
-                    if prob >= threshold:
-                        print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")
-                        _play_beep()
-                        print("ALONE: [Listening...]")
-                        
-                        audio_path = _record_command(_stream._stream)
-                        if audio_path:
-                            callback(audio_path)
-                        
-                        oww_model.reset()
-                        print(f"[*] ALONE: Awaiting '{keyword}'...")
+                    if oww_model:
+                        prediction = oww_model.predict(audio_data)
+                        if prediction:
+                            prob = max(prediction.values()) if prediction.values() else 0.0
+                            
+                            # Print score if > 0.2
+                            if prob > 0.2:
+                                print(f"[ALONE] Wake word score: {prob:.4f}")
+                                
+                            if prob >= threshold:
+                                print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")
+                                _play_beep()
+                                
+                                try:
+                                    from ui.window import signals
+                                    signals.status_changed.emit("LISTENING")
+                                except Exception:
+                                    pass
+                                    
+                                # Close the wake word input stream temporarily to allow command recording
+                                _stream.stop()
+                                _stream.close()
+                                _stream = None
+                                
+                                audio_path = record_until_silence()
+                                if audio_path:
+                                    callback(audio_path)
+                                    
+                                oww_model.reset()
+                                print(f"[*] ALONE: Awaiting wake word...")
                 except Exception as ex:
-                    print(f"[!] InputStream read error (closing stream): {ex}")
+                    print(f"[!] InputStream read error: {ex}")
                     try:
                         if _stream:
                             _stream.close()
@@ -237,232 +320,3 @@ def _listen_loop(callback):
                 time.sleep(0.05)
     except Exception as e:
         print(f"[!] Microphone/Stream error: {e}")
-        print("[*] Falling back to Push-To-Talk Mode due to stream failure...")
-        _ptt_loop(callback)
-
-def _vad_listen_loop(callback):
-    """
-    VAD-based Speech-To-Text wake word detector.
-    Listens continuously, records speech, transcribes, and triggers callback
-    if the wake word is spoken.
-    """
-    global _stream, _listening, _paused
-    
-    print(f"\n[*] ALONE: VAD continuous listening active. Say '{keyword.replace('_', ' ')}' to activate.")
-    chunk_len = 1280
-    
-    from core.transcriber import transcribe
-    
-    try:
-        while _listening:
-            if not _paused:
-                if _stream is None:
-                    try:
-                        time.sleep(0.4)
-                        raw_stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=chunk_len)
-                        _stream = SounddeviceStreamWrapper(raw_stream)
-                        raw_stream.start()
-                        print("[ALONE] Mic stream started successfully")
-                    except Exception as e:
-                        print(f"[ALONE] Failed to start mic stream (waiting for device release...): {e}")
-                        time.sleep(0.5)
-                        continue
-                
-                try:
-                    audio_chunk, overflow = _stream._stream.read(chunk_len)
-                    audio_data = audio_chunk.flatten()
-                    
-                    rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-                    
-                    # Detect speech onset when energy exceeds threshold
-                    if rms >= energy_threshold:
-                        print("\n[VAD] Voice detected, recording...")
-                        
-                        # Record the spoken phrase
-                        audio_path = _record_command(_stream._stream, max_duration=10, silence_timeout=1.5)
-                        if audio_path:
-                            # Transcribe the recorded speech
-                            text = transcribe(audio_path)
-                            print(f"[VAD] Transcribed: '{text}'")
-                            
-                            # Clean and normalize text
-                            cleaned_text = text.lower().strip(".,?! ")
-                            
-                            # Define variants of "hey alone" and "alone" for high-robustness wake word detection
-                            wake_word_variants = ["hey alone", "hey_alone", "alone", "hay alone", "hey salon", "hey along", "hey high line", "hello alone", "hey a long", "hey low"]
-                            
-                            detected = False
-                            matching_variant = ""
-                            for variant in wake_word_variants:
-                                if cleaned_text.startswith(variant) or f" {variant}" in cleaned_text:
-                                    detected = True
-                                    matching_variant = variant
-                                    break
-                            
-                            if detected:
-                                print(f"[!] Wake word detected via VAD! Matching phrase: '{matching_variant}'")
-                                _play_beep()
-                                
-                                # Check for one-shot command
-                                # Extract remaining text after the wake word
-                                remaining_text = ""
-                                idx = cleaned_text.find(matching_variant)
-                                if idx != -1:
-                                    remaining_text = cleaned_text[idx + len(matching_variant):].strip(", ")
-                                
-                                if remaining_text and len(remaining_text) > 1:
-                                    print(f"[VAD] One-shot command detected: '{remaining_text}'")
-                                    # Pass the audio path to the callback to run the workflow directly
-                                    callback(audio_path)
-                                else:
-                                    # Standard wake-word trigger (just the wake word was said)
-                                    print("ALONE: [Listening for command...]")
-                                    # Record the actual command
-                                    cmd_audio_path = _record_command(_stream._stream, max_duration=8, silence_timeout=1.5)
-                                    if cmd_audio_path:
-                                        callback(cmd_audio_path)
-                                    else:
-                                        print("[VAD] No command detected.")
-                            else:
-                                # Not our wake word, clean up the temp file
-                                try:
-                                    if os.path.exists(audio_path):
-                                        os.remove(audio_path)
-                                except Exception:
-                                    pass
-                                print(f"[*] ALONE: Awaiting '{keyword.replace('_', ' ')}'...")
-                except Exception as ex:
-                    print(f"[!] InputStream read error (closing stream): {ex}")
-                    try:
-                        if _stream:
-                            _stream.close()
-                    except Exception:
-                        pass
-                    _stream = None
-                    time.sleep(0.1)
-            else:
-                if _stream:
-                    try:
-                        _stream.close()
-                    except Exception:
-                        pass
-                    _stream = None
-                    print("[ALONE] Mic stream closed")
-                time.sleep(0.05)
-    except Exception as e:
-        print(f"[!] VAD listener error: {e}")
-        print("[*] Falling back to Push-To-Talk Mode...")
-        _ptt_loop(callback)
-
-
-def _ptt_loop(callback):
-    """PTT loop does not continuously stream mic to save CPU. It waits for CLI triggers."""
-    global _listening
-    print("[*] PTT Fallback mode active. Press ENTER on empty line in console to speak.")
-    while _listening:
-        time.sleep(0.5)
-
-def _record_command(stream, max_duration=8, silence_timeout=1.5):
-    """Records from the active stream until silence or max duration"""
-    global _paused, _listening
-    start_time = time.time()
-    frames = []
-    silent_chunks = 0
-    chunk_len = 1280
-    max_silent_chunks = int(silence_timeout * (sample_rate / chunk_len))
-    
-    try:
-        while time.time() - start_time < max_duration and _listening:
-            if _paused:
-                time.sleep(0.05)
-                continue
-                
-            audio_chunk, overflow = stream.read(chunk_len)
-            audio_data = audio_chunk.flatten()
-            frames.append(audio_data.copy())
-            
-            rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-            if rms < energy_threshold:
-                silent_chunks += 1
-            else:
-                silent_chunks = 0
-                
-            if silent_chunks > max_silent_chunks:
-                print("[*] Silence detected in command.")
-                break
-    except Exception as e:
-        print(f"[!] Recording error: {e}")
-        
-    if not frames:
-        return None
-        
-    temp_path = os.path.join(tempfile.gettempdir(), f"alone_cmd_{int(time.time())}.wav")
-    try:
-        with wave.open(temp_path, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(np.concatenate(frames).tobytes())
-        return temp_path
-    except Exception as e:
-        print(f"[!] Failed to save audio file: {e}")
-        return None
-
-def record_ptt_command(max_duration=10, silence_timeout=1.8):
-    """Records from the microphone until the user presses ENTER or silence is detected."""
-    global _stream
-    frames = []
-    chunk_len = 1024
-    start_time = time.time()
-    silent_chunks = 0
-    max_silent_chunks = int(silence_timeout * (sample_rate / chunk_len))
-    
-    check_enter_pressed()
-    
-    try:
-        raw_stream = sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=chunk_len)
-        _stream = SounddeviceStreamWrapper(raw_stream)
-        raw_stream.start()
-        
-        print("[*] Speak now...")
-        while time.time() - start_time < max_duration:
-            audio_chunk, overflow = raw_stream.read(chunk_len)
-            audio_data = audio_chunk.flatten()
-            frames.append(audio_data.copy())
-            
-            if check_enter_pressed():
-                print("[*] ENTER pressed. Stopping recording...")
-                break
-                
-            rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
-            if rms < energy_threshold:
-                silent_chunks += 1
-            else:
-                silent_chunks = 0
-                
-            if silent_chunks > max_silent_chunks:
-                print("[*] Silence detected. Stopping recording...")
-                break
-    except Exception as e:
-        print(f"[!] PTT recording stream error: {e}")
-        return None
-    finally:
-        if _stream:
-            _stream.close()
-            _stream = None
-        
-    if not frames:
-        return None
-        
-    temp_path = os.path.join(tempfile.gettempdir(), f"alone_ptt_{int(time.time())}.wav")
-    try:
-        with wave.open(temp_path, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(np.concatenate(frames).tobytes())
-        print("[*] Recording stopped. Transcribing...")
-        return temp_path
-    except Exception as e:
-        print(f"[!] Failed to save audio file: {e}")
-        return None

@@ -38,3 +38,15 @@ system_prompt: |
   - If the user asks "Are you ChatGPT?", reply: "Hardly. I don't have millions of users. Just you, Sir."
   - If the user asks "Are you JARVIS?", reply: "No, Sir. I am A.L.O.N.E. Different name. Better company."
   - If the user says "I love you ALONE" or "I love you", reply: "Noted, Sir. I will file that under 'unexpected but appreciated'."
+
+wake_word:
+  engine: openwakeword
+  model_path: "data/hey_alone.tflite"
+  fallback_model: "hey_jarvis"
+  threshold: 0.5
+  chunk_size: 1280
+
+vad:
+  mode: 2
+  max_silent_frames: 20
+  max_total_frames: 300
