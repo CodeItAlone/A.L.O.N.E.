@@ -6,7 +6,115 @@ import threading
 import numpy as np
 import sounddevice as sd
 import yaml
+import re
 from openwakeword.model import Model
+
+# Active listening globals
+_last_interaction_time = 0.0
+_active_window_duration = 15.0  # 15 seconds active listening window
+
+def update_last_interaction_time():
+    global _last_interaction_time
+    _last_interaction_time = time.time()
+    print(f"[DEBUG LOGGING] Active listening window updated. Expiry in {_active_window_duration} seconds.")
+
+def get_last_interaction_time():
+    return _last_interaction_time
+
+def levenshtein_distance(s1, s2):
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+def normalize_text(text):
+    if not text:
+        return ""
+    text = text.lower()
+    # Remove punctuation
+    text = re.sub(r"[^\w\s]", "", text)
+    # Normalize whitespaces
+    return " ".join(text.split())
+
+def match_wake_word_fuzzy(normalized_text, threshold=0.75):
+    """
+    Checks if normalized_text starts with or contains a fuzzy match of target phrases.
+    Targets: "hey alone" (2 words), "alone" (1 word).
+    Returns (detected, matched_phrase, confidence, clean_command).
+    """
+    words = normalized_text.split()
+    if not words:
+        return False, "", 0.0, normalized_text
+        
+    best_sim = 0.0
+    best_match_phrase = ""
+    best_match_len = 0
+    
+    # Check "hey alone" target (2 words)
+    if len(words) >= 2:
+        for i in range(len(words) - 1):
+            phrase = words[i] + " " + words[i+1]
+            dist = levenshtein_distance(phrase, "hey alone")
+            sim = 1.0 - (dist / max(len(phrase), 9))
+            if sim > best_sim:
+                best_sim = sim
+                best_match_phrase = phrase
+                best_match_len = 2
+                
+    # Check "alone" target (1 word)
+    for i in range(len(words)):
+        word = words[i]
+        dist = levenshtein_distance(word, "alone")
+        sim = 1.0 - (dist / max(len(word), 5))
+        if sim > best_sim:
+            best_sim = sim
+            best_match_phrase = word
+            best_match_len = 1
+            
+    # Also support other manual phonetic triggers for high confidence
+    phonetic_triggers = ["alon", "alloon", "aloon", "allone", "loon", "loone", "elone", "hey salon", "hey along", "hey low", "he alone", "he alon"]
+    for i, word in enumerate(words):
+        if word in phonetic_triggers:
+            sim = 0.95
+            if sim > best_sim:
+                best_sim = sim
+                best_match_phrase = word
+                best_match_len = 1
+
+    # Check for two word phonetic triggers
+    if len(words) >= 2:
+        for i in range(len(words) - 1):
+            phrase = words[i] + " " + words[i+1]
+            for trigger in ["hey aloon", "hey alon", "hey allon", "hey alloon", "hey allone", "hey loone", "hay alone", "hay alon", "hay alloon"]:
+                if phrase == trigger:
+                    sim = 0.98
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_match_phrase = phrase
+                        best_match_len = 2
+
+    if best_sim >= threshold:
+        clean_command = normalized_text
+        if normalized_text.startswith(best_match_phrase):
+            clean_command = normalized_text[len(best_match_phrase):].strip()
+        else:
+            idx = normalized_text.find(best_match_phrase)
+            if idx != -1:
+                clean_command = (normalized_text[:idx] + " " + normalized_text[idx + len(best_match_phrase):]).strip()
+        return True, best_match_phrase, best_sim, clean_command
+        
+    return False, "", 0.0, normalized_text
+
 
 # Try importing webrtcvad
 try:
@@ -91,14 +199,20 @@ def load_wakeword_model():
             print(f"[ALONE] Failed to load custom model: {e}. Using fallback.")
             
     if oww_model is None:
-        print(f"[ALONE] Loading fallback wake word model: {fallback_model}")
-        try:
-            oww_model = Model(
-                wakeword_models=[fallback_model],
-                inference_framework="onnx"
-            )
-        except Exception as e:
-            print(f"[ALONE] Critical: Failed to load fallback model: {e}")
+        cfg = _load_config()
+        wake_word = cfg.get("voice", {}).get("wake_word", "hey_alone")
+        if wake_word == "hey_alone":
+            print("[ALONE] Custom wake word 'hey_alone' requested but tflite model is missing. Falling back to VAD Speech-to-Text engine.")
+            oww_model = None
+        else:
+            print(f"[ALONE] Loading fallback wake word model: {fallback_model}")
+            try:
+                oww_model = Model(
+                    wakeword_models=[fallback_model],
+                    inference_framework="onnx"
+                )
+            except Exception as e:
+                print(f"[ALONE] Critical: Failed to load fallback model: {e}")
             
     return oww_model
 
@@ -147,7 +261,6 @@ def record_until_silence():
     vad = None
     if _has_webrtcvad:
         try:
-            import webrtcvad
             vad = webrtcvad.Vad(vad_mode)
             print(f"[ALONE] webrtcvad initialized with mode {vad_mode}")
         except Exception as e:
@@ -300,10 +413,112 @@ def _listen_loop(callback):
                                     
                                 oww_model.reset()
                                 print(f"[*] ALONE: Awaiting wake word...")
+                    else:
+                        # VAD Speech-To-Text fallback for custom wake word "hey alone"
+                        rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+                        if rms >= energy_threshold:
+                            is_within_active_window = (time.time() - _last_interaction_time <= _active_window_duration)
+                            
+                            if is_within_active_window:
+                                print(f"\n[VAD Fallback] Speech detected (RMS: {rms:.1f}) within ACTIVE WINDOW ({time.time() - _last_interaction_time:.1f}s elapsed).")
+                            else:
+                                print(f"\n[VAD Fallback] Speech detected (RMS: {rms:.1f}). Capturing potential command...")
+                            
+                            # Temporarily close stream for recording
+                            _stream.stop()
+                            _stream.close()
+                            _stream = None
+                            
+                            audio_path = record_until_silence()
+                            if audio_path:
+                                from core.transcriber import transcribe
+                                print("[VAD Fallback] Transcribing captured slice...")
+                                text = transcribe(audio_path)
+                                print(f"[DEBUG LOGGING] Raw Whisper transcription: '{text}'")
+                                
+                                normalized_text = normalize_text(text)
+                                print(f"[DEBUG LOGGING] Normalized transcription: '{normalized_text}'")
+                                
+                                # Systematically check if the user spoke the wake word
+                                detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
+                                print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
+                                
+                                if detected:
+                                    # User spoke the wake word (either alone or as a one-shot command)
+                                    _play_beep()
+                                    try:
+                                        from ui.window import signals
+                                        signals.status_changed.emit("LISTENING")
+                                    except Exception:
+                                        pass
+                                        
+                                    is_only_wake_word = (clean_command == "")
+                                    print(f"[DEBUG LOGGING] Command extraction result: '{clean_command}' (Is Only Wake Word: {is_only_wake_word})")
+                                    
+                                    if is_only_wake_word:
+                                        print("[VAD Fallback] Wake word only. Recording actual command...")
+                                        # Delete the wake-word audio file to save disk space
+                                        if os.path.exists(audio_path):
+                                            try:
+                                                os.remove(audio_path)
+                                            except Exception:
+                                                pass
+                                                
+                                        cmd_audio_path = record_until_silence()
+                                        if cmd_audio_path:
+                                            callback(cmd_audio_path)
+                                        else:
+                                            print("[VAD Fallback] No command detected.")
+                                            try:
+                                                from ui.window import signals
+                                                signals.status_changed.emit("IDLE")
+                                            except Exception:
+                                                pass
+                                    else:
+                                        print("[VAD Fallback] One-shot command detected.")
+                                        callback(audio_path)
+                                else:
+                                    # Wake word was NOT detected in the transcription
+                                    if is_within_active_window:
+                                        # Accept direct command within the active window only if transcription has content
+                                        if normalized_text.strip() != "":
+                                            print("[VAD Fallback] Active window bypass active. SUCCESS: Direct command accepted!")
+                                            _play_beep()
+                                            try:
+                                                from ui.window import signals
+                                                signals.status_changed.emit("LISTENING")
+                                            except Exception:
+                                                pass
+                                            callback(audio_path)
+                                        else:
+                                            print("[VAD Fallback] Empty speech detected in active window.")
+                                            try:
+                                                from ui.window import signals
+                                                signals.status_changed.emit("IDLE")
+                                            except Exception:
+                                                pass
+                                            if os.path.exists(audio_path):
+                                                try:
+                                                    os.remove(audio_path)
+                                                except Exception:
+                                                    pass
+                                    else:
+                                        # Outside active window and no wake word -> ignore
+                                        print("[VAD Fallback] No wake word detected in speech.")
+                                        try:
+                                            from ui.window import signals
+                                            signals.status_changed.emit("IDLE")
+                                        except Exception:
+                                            pass
+                                        if os.path.exists(audio_path):
+                                            try:
+                                                os.remove(audio_path)
+                                            except Exception:
+                                                pass
                 except Exception as ex:
                     print(f"[!] InputStream read error: {ex}")
                     try:
-                        if _stream:
+                       if _stream:
                             _stream.close()
                     except Exception:
                         pass
