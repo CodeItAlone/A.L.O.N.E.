@@ -64,9 +64,14 @@ class ForgivingReActOutputParser(ReActSingleInputOutputParser):
             # Re-raise standard formatting exceptions if there IS an 'action:' keyword but it failed parsing
             raise e
 
-def _load_config(path="config.yaml"):
+def _load_config(path=None):
+    if path is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(base_dir, "config.yaml")
     if not os.path.exists(path):
-        if os.path.exists("../config.yaml"):
+        if os.path.exists("config.yaml"):
+            path = "config.yaml"
+        elif os.path.exists("../config.yaml"):
             path = "../config.yaml"
     with open(path, "r") as f:
         return yaml.safe_load(f)
@@ -75,19 +80,28 @@ class AloneCallbackHandler(BaseCallbackHandler):
     def __init__(self, stop_event=None):
         self.stop_event = stop_event
 
-    def on_llm_start(self, *args, **kwargs):
+    def on_llm_start(self, serialized: dict, prompts: list[str], **kwargs):
+        print(f"[DEBUG LOGGING] LLM Query execution started.")
         if self.stop_event and self.stop_event.is_set():
             raise KeyboardInterrupt("Agent task cancelled by user.")
             
-    def on_tool_start(self, *args, **kwargs):
+    def on_llm_end(self, response, **kwargs):
+        generation = response.generations[0][0].text if response.generations else ""
+        print(f"[DEBUG LOGGING] LLM Query execution completed. Raw response: '{generation.strip()}'")
+
+    def on_tool_start(self, serialized: dict, input_str: str, **kwargs):
+        tool_name = serialized.get("name", "unknown_tool")
+        print(f"[DEBUG LOGGING] Tool Selected / Selected Action: '{tool_name}' | Input: '{input_str}'")
+        print(f"[DEBUG LOGGING] Tool execution started: '{tool_name}'")
         if self.stop_event and self.stop_event.is_set():
             raise KeyboardInterrupt("Agent task cancelled by user.")
 
     def on_tool_end(self, output: str, *, run_id, parent_run_id=None, **kwargs):
+        tool_name = kwargs.get("name", "unknown_tool")
+        print(f"[DEBUG LOGGING] Tool execution completed: '{tool_name}' | Output: '{output}'")
         # After each successful tool execution, save to memory
         try:
             from core import memory
-            tool_name = kwargs.get("name", "unknown_tool")
             memory.add_memory(
                 role="system",
                 content=f"Executed tool '{tool_name}' and got output: {output}",
@@ -95,6 +109,10 @@ class AloneCallbackHandler(BaseCallbackHandler):
             )
         except Exception as e:
             print(f"[Memory Warning] Failed to log tool execution: {e}")
+
+    def on_tool_error(self, error: BaseException, **kwargs):
+        tool_name = kwargs.get("name", "unknown_tool")
+        print(f"[DEBUG LOGGING] Tool execution failed: '{tool_name}' | Error: {error}")
 
 def get_time():
     import datetime
@@ -238,25 +256,31 @@ Thought:{agent_scratchpad}"""
             # --- QUICK COMMANDS BYPASS ---
             key = cleaned_input.rstrip("?.!")
             if key in QUICK_COMMANDS:
-                print(f"[ALONE] Quick command: {key}")
+                print(f"[DEBUG LOGGING] Quick command matched: '{key}'")
                 return QUICK_COMMANDS[key]()
             
             # --- CUSTOM COMMAND: ALONE forget that ---
             if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
                 from core import memory
+                print(f"[DEBUG LOGGING] Custom memory clear command detected.")
                 result = memory.clear_last_memory()
                 return result
                 
             # --- EASTER EGGS AND HELP COMMANDS ---
             if cleaned_input in ["are you skynet?", "are you skynet"]:
+                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you skynet'")
                 return "No. I am something far quieter, and considerably more dangerous, Sir."
             if cleaned_input in ["are you chatgpt?", "are you chatgpt"]:
+                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you chatgpt'")
                 return "Hardly. I don't have millions of users. Just you, Sir."
             if cleaned_input in ["are you jarvis?", "are you jarvis"]:
+                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you jarvis'")
                 return "No, Sir. I am A.L.O.N.E. Different name. Better company."
             if cleaned_input in ["i love you alone", "i love you", "love you"]:
+                print(f"[DEBUG LOGGING] Easter egg query matched: 'i love you alone'")
                 return "Noted, Sir. I will file that under 'unexpected but appreciated'."
             if cleaned_input in ["what can you do?", "what can you do", "help", "alone help"]:
+                print(f"[DEBUG LOGGING] Help command matched.")
                 tool_list = []
                 for t in self.tools:
                     tool_list.append(f"- **{t.name}**: {t.description}")
@@ -270,6 +294,7 @@ Thought:{agent_scratchpad}"""
             # --- CUSTOM COMMAND: ALONE what do you remember? ---
             if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
                 from core import memory
+                print(f"[DEBUG LOGGING] Custom memory retrieval command detected.")
                 summary = memory.get_session_summary()
                 if "No memories" in summary:
                     return "Sir, I do not remember anything recorded from today yet."
@@ -281,6 +306,7 @@ Thought:{agent_scratchpad}"""
             if name_match:
                 name = name_match.group(1).strip().title()
                 from core import memory
+                print(f"[DEBUG LOGGING] Custom remember name command detected: '{name}'")
                 memory.save_preference("user_name", name)
                 return f"Understood, Sir. I will remember that your name is {name}."
                 
@@ -289,17 +315,21 @@ Thought:{agent_scratchpad}"""
             if project_match:
                 path = project_match.group(1).strip()
                 from core import memory
+                print(f"[DEBUG LOGGING] Custom remember project path command detected: '{path}'")
                 memory.save_preference("project_path", path)
                 
             app_match = re.search(r"(?:my\s+favorite\s+app\s+is|frequent\s+app\s+is)\s+([a-zA-Z0-9\s]+)", user_input, re.IGNORECASE)
             if app_match:
                 app = app_match.group(1).strip()
                 from core import memory
+                print(f"[DEBUG LOGGING] Custom remember frequent app command detected: '{app}'")
                 memory.save_preference("frequent_app", app)
             
             # Clean input for the agent
+            print(f"[DEBUG LOGGING] Calling LLM/Agent Executor for command: '{user_input}'")
             result = self.agent_executor.invoke({"input": user_input})
             output = result["output"]
+            print(f"[DEBUG LOGGING] LLM/Agent response received: '{output}'")
             
             # Ensure persona is maintained if agent forgot
             if "Sir" not in output:
@@ -307,8 +337,12 @@ Thought:{agent_scratchpad}"""
                 
             return output
         except KeyboardInterrupt:
+            print(f"[DEBUG LOGGING] LLM/Agent task execution cancelled by KeyboardInterrupt.")
             return "Task cancelled, Sir."
         except Exception as e:
+            import traceback
+            print(f"[DEBUG LOGGING] LLM/Agent execution failed with exception: {e}")
+            traceback.print_exc()
             return f"I apologize, Sir, but my mechanical hands failed: {e}"
 
 # Singleton instance
