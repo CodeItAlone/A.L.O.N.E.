@@ -6,7 +6,13 @@ from langchain.tools import tool
 
 def _get_llm():
     # Load config to get model and url
-    config_path = "config.yaml"
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_path = os.path.join(base_dir, "config.yaml")
+    if not os.path.exists(config_path):
+        if os.path.exists("config.yaml"):
+            config_path = "config.yaml"
+        elif os.path.exists("../config.yaml"):
+            config_path = "../config.yaml"
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return ChatOllama(model=config["model"], base_url=config["model_url"], keep_alive="5m")
