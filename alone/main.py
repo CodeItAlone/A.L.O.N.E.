@@ -7,6 +7,19 @@ import yaml
 import random
 from datetime import datetime
 
+# Automatic redirection for headless running
+if sys.executable.lower().endswith("pythonw.exe") or sys.stdout is None:
+    try:
+        _log_dir = os.path.expanduser("~/.alone")
+        os.makedirs(_log_dir, exist_ok=True)
+        _log_file = open(os.path.join(_log_dir, "alone.log"), "a", encoding="utf-8", buffering=1)
+        sys.stdout = _log_file
+        sys.stderr = _log_file
+        print(f"\n--- ALONE Headless Log Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+    except Exception:
+        pass
+
+
 # Ensure project root is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -18,6 +31,7 @@ from core.agent import run_agent
 _shutdown_flag = threading.Event()
 _speech_queue = get_queue()
 _shutting_down = False
+_agent_active = threading.Event()
 
 def handle_audio(audio_path):
     """
@@ -41,15 +55,37 @@ def handle_audio(audio_path):
                 pass
             return
         
-        print(f"You: {text}")
+        # ----------------------------------------------------
+        # NEW ROBUST NORMALIZATION & FUZZY MATCHING STRIPPING
+        # ----------------------------------------------------
+        from core.listener import normalize_text, match_wake_word_fuzzy, update_last_interaction_time, get_last_interaction_time, _active_window_duration
         
-        # Clean wake word prefix if present (e.g. for VAD one-shot)
-        clean_text = text.strip()
-        wake_word_variants = ["hey alone", "hey_alone", "alone", "hay alone", "hey salon", "hey along", "hey high line", "hello alone", "hey a long", "hey low", "hey_jarvis", "hey jarvis"]
-        for prefix in wake_word_variants:
-            if clean_text.lower().startswith(prefix):
-                clean_text = clean_text[len(prefix):].strip(", ")
-                break
+        print(f"[DEBUG LOGGING] Raw Whisper transcription: '{text}'")
+        normalized_text = normalize_text(text)
+        print(f"[DEBUG LOGGING] Normalized transcription: '{normalized_text}'")
+        
+        # Check active window bypass
+        import time
+        is_active_window = (time.time() - get_last_interaction_time() <= _active_window_duration)
+        detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
+        
+        print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
+        
+        if is_active_window:
+            print(f"[DEBUG LOGGING] Active listening window active ({time.time() - get_last_interaction_time():.1f}s elapsed). Bypassing wake-word check.")
+            # If wake word was spoken, clean it; otherwise use full normalized text as command
+            if detected:
+                clean_text = clean_command
+            else:
+                clean_text = normalized_text
+        else:
+            if detected:
+                clean_text = clean_command
+            else:
+                clean_text = clean_command
+                
+        print(f"[DEBUG LOGGING] Command extraction result: '{clean_text}'")
+        # ----------------------------------------------------
                 
         if not clean_text:
             try:
@@ -95,18 +131,35 @@ def handle_audio(audio_path):
             _shutdown_flag.set()
             return
         
-        result = run_agent(clean_text)
-        
-        # Always speak the result
-        if isinstance(result, dict):
-            output = result.get("output", result.get("response", str(result)))
-        else:
-            output = str(result)
+        _agent_active.set()
+        try:
+            print(f"[DEBUG LOGGING] Intent routing starting for command: '{clean_text}'")
+            result = run_agent(clean_text)
             
-        if output:
-            speak_async(output)
+            # Always speak the result
+            if isinstance(result, dict):
+                output = result.get("output", result.get("response", str(result)))
+            else:
+                output = str(result)
+                
+            print(f"[DEBUG LOGGING] Intent routing & Action execution result: '{output}'")
+            
+            # Update active window timer on successful command execution
+            update_last_interaction_time()
+            
+            if output:
+                try:
+                    from ui.window import signals
+                    signals.response_received.emit(output)
+                except Exception:
+                    pass
+                speak_async(output)
+        finally:
+            _agent_active.clear()
     except Exception as e:
+        import traceback
         print(f"[ALONE AUDIO CALLBACK ERROR] {e}")
+        traceback.print_exc()
         try:
             from ui.window import signals
             signals.status_changed.emit("IDLE")
@@ -124,6 +177,10 @@ def text_input_loop():
     Runs in background thread.
     Handles keyboard fallback input.
     """
+    if sys.stdin is None or not sys.stdin.isatty():
+        print("[ALONE] sys.stdin is not a TTY or is None. TextInput background thread disabled.")
+        return
+        
     while not _shutdown_flag.is_set():
         try:
             user_input = input("You (text): ")
@@ -150,19 +207,33 @@ def text_input_loop():
                 _shutdown_flag.set()
                 break
                 
-            result = run_agent(user_input)
-            response_text = ""
-            if isinstance(result, dict):
-                response_text = result.get("output", result.get("response", str(result)))
-            elif isinstance(result, str):
-                response_text = result
+            _agent_active.set()
+            try:
+                result = run_agent(user_input)
+                response_text = ""
+                if isinstance(result, dict):
+                    response_text = result.get("output", result.get("response", str(result)))
+                elif isinstance(result, str):
+                    response_text = result
+                    
+                # Update active window timer on successful command execution
+                from core.listener import update_last_interaction_time
+                update_last_interaction_time()
                 
-            if response_text:
-                speak_async(response_text)
-        except EOFError:
+                if response_text:
+                    try:
+                        from ui.window import signals
+                        signals.response_received.emit(response_text)
+                    except Exception:
+                        pass
+                    speak_async(response_text)
+            finally:
+                _agent_active.clear()
+        except (EOFError, OSError):
             break
         except Exception as e:
             print(f"[ALONE TEXT INPUT ERROR] {e}")
+            break
 
 def shutdown(signum=None, frame=None):
     """
@@ -251,7 +322,10 @@ def main():
                 pass
             process_speech_queue()
             try:
-                signals.status_changed.emit("IDLE")
+                if _agent_active.is_set():
+                    signals.status_changed.emit("THINKING")
+                else:
+                    signals.status_changed.emit("IDLE")
             except Exception:
                 pass
                 
