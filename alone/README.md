@@ -1,20 +1,24 @@
 # A.L.O.N.E. 🤖
-### *An Autonomous, Local-First AI Voice Assistant with Computer Control*
+### *An Autonomous, Local-First AI Voice Assistant with Computer Control & Floating HUD*
 
-A.L.O.N.E. is a local AI personal assistant built to operate completely offline on your local machine. By combining LangChain-based ReAct agent reasoning with an optimized real-time voice pipeline and computer automation tools, A.L.O.N.E. functions as a fully capable, hands-free companion.
+A.L.O.N.E. (Just A Rather Very Intelligent System) is an offline, privacy-first personal assistant running completely locally on your laptop. By combining a LangChain-based ReAct agent reasoning engine with an optimized voice pipeline and local automation tools, A.L.O.N.E. provides premium desktop operations completely hands-free.
 
 ---
 
 ## 🏛️ System Architecture
-
-A.L.O.N.E.'s architecture is divided into three key systems:
 
 ```
                   ┌──────────────────────────────┐
                   │          THE VOICE           │
                   │ (openWakeWord, Whisper, SAPI)│
                   └──────────────┬───────────────┘
-                                 │ Audio Capture
+                                 │ Mic RMS & Status Signals
+                                 ▼
+                  ┌──────────────────────────────┐
+                  │          THE SUIT            │
+                  │   (PyQt5 Frameless HUD UI)   │
+                  └──────────────┬───────────────┘
+                                 │ User Query
                                  ▼
                   ┌──────────────────────────────┐
                   │          THE BRAIN           │
@@ -28,88 +32,108 @@ A.L.O.N.E.'s architecture is divided into three key systems:
                   └──────────────────────────────┘
 ```
 
-1. **The Voice (Audio Pipeline)**: Handles continuous wake-word standby, dynamic ambient room noise calibration, local Whisper speech-to-text transcription, and a thread-safe SAPI5 speech synthesis queue.
-2. **The Brain (Cognitive Layer)**: A LangChain-driven local agent using Ollama (`llama3.1:8b`) to interpret user queries, manage conversational memory, and autonomously plan tool executions.
-3. **The Hands (Automation Layer)**: A set of system-level integration tools enabling the assistant to open applications, run shell commands, browse the web, write code, and control standard desktop tools.
+1. **The Voice (Audio Pipeline)**: Manages continuous wake-word standby, dynamic ambient room noise calibration, local Whisper speech-to-text transcription, and a thread-safe SAPI5 speech synthesis queue.
+2. **The Suit (PyQt5 HUD)**: A beautiful, frameless floating overlay sitting in the bottom-right of your screen. Features real-time audio waveform animations (scaling with mic input RMS levels), a pulsing circle during thinking loops, user/response text rows, and a system tray icon with a complete settings configuration panel.
+3. **The Brain (Cognitive Layer)**: A local ReAct agent using Ollama (`llama3.1:8b`) to interpret user inputs, manage conversational history, retrieve long-term context from ChromaDB, and schedule tool executions.
+4. **The Hands (Automation Layer)**: System-level integration tools enabling the assistant to open apps, run shell commands with intent verification, browse the web, write/execute code, and manipulate files.
 
 ---
 
-## 🛠️ Key Technical Implementations & Workarounds
+## 💻 Hardware & Software Requirements
 
-To guarantee highly stable, real-time operations on Windows, the system incorporates three specialized architectural breakthroughs:
-
-### 1. Non-Blocking Async Speech Queue
-To prevent the main execution thread from freezing during audio playback, the system uses a queue-based text-to-speech design. String responses are enqueued non-blockingly via `speak_async()`, while the main loop regularly polls and drains the queue via `process_speech_queue()` in a fluid, non-blocking tick loop.
-
-### 2. Thread-Safe SAPI5 COM Isolation
-Windows SAPI (`pyttsx3`) relies on the COM Single-Threaded Apartment (STA) model, raising errors if invoked from audio processing background threads. SAPI initialization and execution are fully isolated and run **exclusively** on the dedicated Main Thread during queue drainage.
-
-### 3. Dynamic Sounddevice Stream Recreation (Bypassing MME Error 33)
-The Windows MME audio driver locks sound devices exclusively during SAPI playback, blocking `sounddevice` from resuming the microphone capture stream. A.L.O.N.E. resolves this by:
-* Instantiating SAPI locally inside each speech block and explicitly garbage collecting the COM resources immediately afterward.
-* Toggling simple state flags on pause/resume, letting the background audio thread completely **close** the active microphone `InputStream` on pause, and negotiate a **completely fresh** stream binding on resume.
+| Component | Minimum Specification | Recommended Specification |
+| :--- | :--- | :--- |
+| **OS** | Windows 10/11 (CUDA setup supported) | Windows 10/11 |
+| **RAM** | 8 GB RAM (Ollama CPU standard) | 16 GB+ RAM (8B Model standard) |
+| **CPU** | 4 Cores, 2.5 GHz | 8 Cores+ (Faster Whisper / LLM inference) |
+| **GPU** | Optional (CPU standard works well) | NVIDIA GPU (4GB+ VRAM) for CUDA speedup |
+| **Microphone**| Any built-in laptop mic | Dedicated USB microphone or headset |
 
 ---
 
-## 📁 Repository Structure
+## 🚀 Quick Install Guide (3 Steps)
 
-```text
-alone/
-├── artifacts/             # Engineering reports and documentation
-├── core/
-│   ├── agent.py           # LangChain ReAct agent brain & memory
-│   ├── brain.py           # Ollama client connection
-│   ├── listener.py        # openWakeWord mic loop & calibration
-│   ├── speaker.py         # Thread-safe speech queue & local SAPI5
-│   └── transcriber.py     # Faster-Whisper audio transcription
-├── tools/
-│   ├── browser.py         # OS browser integration
-│   ├── search.py          # Search web automation
-│   ├── system.py          # OS utility commands (e.g. run_shell)
-│   └── writer.py          # File writing tools
-├── config.yaml            # Model urls, voice parameters, & audio settings
-├── main.py                # Main application loop and thread coordinator
-├── requirements.txt       # Python dependencies
-└── venv/                  # Local python virtual environment
+Get A.L.O.N.E. online on your Windows machine in 3 simple steps:
+
+### Step 1: Clone & Configure
+Install Python 3.10 or 3.11 and ensure Ollama is installed and running:
+```powershell
+ollama pull llama3.1:8b
 ```
 
----
+### Step 2: Run Installer
+Open the repository folder, navigate to `install` and double-click `setup.bat`.
+This will:
+* Verify and configure local `~/.alone/` structures and memory folders.
+* Install all required dependencies from `requirements.txt`.
+* Generate a headless boot shortcut (`ALONE.lnk`) inside the Windows Startup folder.
 
-## 🚀 Getting Started
-
-### 📋 Prerequisites
-* **Python**: Python 3.10 or 3.11 recommended.
-* **Ollama**: Installed and running locally.
-* **FFmpeg**: Required on your system path for Faster-Whisper transcriptions.
-
-### ⚙️ Setup and Installation
-
-1. **Activate Local Virtual Environment**:
-   ```powershell
-   .\venv\Scripts\activate
-   ```
-
-2. **Pull the Configured LLM**:
-   Verify that your Ollama server is running, and pull your configured model (as specified in `config.yaml`):
-   ```powershell
-   ollama pull llama3.1:8b
-   ```
-
-3. **Verify Dependencies**:
-   Ensure all local dependencies are fully installed inside the active virtual environment:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-4. **Launch the Assistant**:
-   ```powershell
-   python main.py
-   ```
+### Step 3: Launch A.L.O.N.E.
+Start the application from the root repository:
+```powershell
+python main.py
+```
+*At startup, remain quiet for 1.5 seconds so the microphone can calibrate to ambient room noise.*
 
 ---
 
-## 🎙️ Operating A.L.O.N.E.
+## 🎙️ Personality & Custom Commands
 
-* **Mic Calibration**: At startup, remain quiet for 1.5 seconds so the system can measure ambient room noise. The dynamic threshold is safely capped at `800.0` to prevent noise spikes from desensitizing wake-word detection.
-* **Wake Word Trigger**: Say **`hey_jarvis`** clearly. A soft chime will sound, indicating that the assistant is actively recording your query.
-* **Fallback Keyboard Entry**: You can type queries directly into the terminal prompt whenever the continuous listener is awaiting the wake word.
+A.L.O.N.E. possesses a dry, calm, and composed personality. It greets you dynamically based on the time of day ("Good morning", "Good afternoon", "Good evening") and responds with built-in witty Easter eggs for certain questions:
+* *"Are you Skynet?"*
+* *"Are you ChatGPT?"*
+* *"Are you JARVIS?"*
+* *"I love you"*
+
+### System Interactions:
+* **`alone help` or `what can you do?`**: Instantly prints all registered system automation tools.
+* **`forget that`**: Deletes the most recent semantic transaction from ChromaDB memory.
+* **`what do you remember?`**: Recalls a chronological summary of all memories recorded in today's session.
+
+---
+
+## 🛠️ How to Add a New Tool
+
+All A.L.O.N.E. tools inherit from LangChain's `@tool` decorator. Add your new tool in 3 simple steps:
+
+1. **Write Tool Definition**: Open [alone/tools/system.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/tools/system.py) and write your python function under the `@tool` decorator:
+   ```python
+   @tool
+   def my_custom_tool(param: str) -> str:
+       """Put a highly descriptive docstring here so the ReAct LLM knows when to call it."""
+       try:
+           # Tool implementation
+           return f"Successfully executed with param: {param}"
+       except Exception as e:
+           return f"Failed: {e}"
+   ```
+
+2. **Register Tool**: Import and add your tool inside [alone/tools/__init__.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/tools/__init__.py):
+   ```python
+   from .system import my_custom_tool
+   
+   # Add it to the ALL_TOOLS array
+   ALL_TOOLS = [
+       ...
+       my_custom_tool
+   ]
+   ```
+
+3. **Reload A.L.O.N.E.**: Restart `main.py` and the assistant will automatically register and describe the tool to the LLM during runtime!
+
+## ⚙️ Robust Synchronization & VAD Fixes
+
+To guarantee smooth hands-free desktop operations and prevent continuous loop locks, we implemented two key architectural refinements:
+
+1. **Systematic Wake Word Verification in Active Listening**:
+   Refined the continuous VAD Fallback listening engine inside `core/listener.py` to prioritize wake word matching even during the 15-second follow-up window. This ensures that saying "hey alone" to trigger a new command plays the chime immediately, resets the standby recording loop, and captures the fresh command cleanly without returning early to `IDLE` or causing Whisper to transcribe hallucinated static noise (like *"I'll see you"*).
+2. **Global Platform Resolution**:
+   Fixed settings GUI startup path shortcuts by resolving a local scope NameError in `alone/ui/settings.py` for `platform.system()`, migrating OS detection to a clean global import.
+
+---
+
+## ⚠️ Known Limitations
+
+1. **Speech Queue apartment COM locks**: SAPI5 speech synthesis is restricted strictly to the Main Thread event loop (managed via QTimers) to prevent access violation crashes during thread crossovers.
+2. **Device Stream Locks**: On Windows, default audio devices will lock exclusively during pyttsx3 speech operations, blocking simultaneous Whisper listener audio stream binding. A.L.O.N.E. bypasses this by closing and tearing down active `InputStream` bindings during pause/resume state cycles.
+3. **Frameless Window Draggability**: HUD Window does not have standard OS frame handles. Double-click and drag the container frame directly to reposition it on screen.
