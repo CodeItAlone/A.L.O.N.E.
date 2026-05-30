@@ -5,7 +5,7 @@ sys.path.append(os.getcwd())
 
 from core.agent import run_agent
 
-def test_command(command):
+def run_test_command(command):
     print(f"\n[Testing Command]: {command}")
     try:
         response = run_agent(command)
@@ -31,5 +31,5 @@ commands = [
 if __name__ == "__main__":
     print("Starting 10 Command Challenge...")
     for cmd in commands:
-        test_command(cmd)
+        run_test_command(cmd)
     print("\nChallenge Complete.")
