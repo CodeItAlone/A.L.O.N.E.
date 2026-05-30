@@ -6,9 +6,12 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 class Brain:
-    def __init__(self, config_path="config.yaml"):
+    def __init__(self, config_path=None):
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if config_path is None:
+            config_path = os.path.join(base_dir, "config.yaml")
         self.config = self._load_config(config_path)
-        self.history_file = self.config.get("history_file", "history.json")
+        self.history_file = os.path.join(base_dir, self.config.get("history_file", "history.json"))
         self.max_history = self.config.get("max_history", 20)
         
         # Initialize Ollama client
@@ -36,7 +39,12 @@ class Brain:
 
     def _load_config(self, path):
         if not os.path.exists(path):
-            raise FileNotFoundError(f"Config file not found at {path}")
+            if os.path.exists("config.yaml"):
+                path = "config.yaml"
+            elif os.path.exists("../config.yaml"):
+                path = "../config.yaml"
+            else:
+                raise FileNotFoundError(f"Config file not found at {path}")
         with open(path, "r") as f:
             return yaml.safe_load(f)
 
