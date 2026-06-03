@@ -33,7 +33,7 @@ A.L.O.N.E. (Just A Rather Very Intelligent System) is an offline, privacy-first 
 ```
 
 1. **The Voice (Audio Pipeline)**: Manages continuous wake-word standby, dynamic ambient room noise calibration, local Whisper speech-to-text transcription, and a thread-safe SAPI5 speech synthesis queue.
-2. **The Suit (PyQt5 HUD)**: A beautiful, frameless floating overlay sitting in the bottom-right of your screen. Features real-time audio waveform animations (scaling with mic input RMS levels), a pulsing circle during thinking loops, user/response text rows, and a system tray icon with a complete settings configuration panel.
+2. **The Suit (PyQt5 HUD)**: A beautiful, frameless floating overlay sitting in the bottom-right of your screen. Features real-time audio waveform animations (scaling with mic input RMS levels), a pulsing circle during thinking loops, user/response text rows, a system tray icon with a complete settings configuration panel, and a red-themed "Stop Agent" button at the bottom for quick and clean termination directly from the GUI (with confirmation).
 3. **The Brain (Cognitive Layer)**: A local ReAct agent using Ollama (`llama3.1:8b`) to interpret user inputs, manage conversational history, retrieve long-term context from ChromaDB, and schedule tool executions.
 4. **The Hands (Automation Layer)**: System-level integration tools enabling the assistant to open apps, run shell commands with intent verification, browse the web, write/execute code, and manipulate files.
 
