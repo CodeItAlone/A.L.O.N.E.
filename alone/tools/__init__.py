@@ -3,6 +3,7 @@ from .browser import open_url
 from .coder import write_code, run_code
 from .files import read_file, write_file, list_files, delete_file
 from .search import search_web
+from .human_memory import search_human_memory, manage_goals, manage_projects, manage_contacts
 
 # State to track the latest user query for security boundary validation
 _latest_query = ""
@@ -20,5 +21,6 @@ ALL_TOOLS = [
     open_url,
     write_code, run_code,
     read_file, write_file, list_files, delete_file,
-    search_web
+    search_web,
+    search_human_memory, manage_goals, manage_projects, manage_contacts
 ]

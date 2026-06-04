@@ -261,14 +261,23 @@ class AloneSettingsWindow(QDialog):
         cancel_btn = QPushButton("Cancel", self)
         cancel_btn.clicked.connect(self.reject)
         
+        manage_mem_btn = QPushButton("Manage Memory", self)
+        manage_mem_btn.clicked.connect(self.open_memory_editor)
+        
         save_btn = QPushButton("Save Settings", self)
         save_btn.clicked.connect(self.save_config)
         
         footer.addWidget(cancel_btn)
+        footer.addWidget(manage_mem_btn)
         footer.addWidget(save_btn)
         layout.addLayout(footer)
 
         self.setLayout(layout)
+
+    def open_memory_editor(self):
+        from ui.memory_ui import AloneMemoryWindow
+        self.memory_win = AloneMemoryWindow(self)
+        self.memory_win.show()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

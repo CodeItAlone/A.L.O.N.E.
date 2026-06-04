@@ -1000,17 +1000,26 @@ class AloneHUDWindow(QWidget):
         settings_action = QAction("Settings", self)
         settings_action.triggered.connect(signals.open_settings.emit)
         
+        memory_action = QAction("Memory Editor", self)
+        memory_action.triggered.connect(self.open_memory_editor)
+        
         quit_action = QAction("Quit ALONE", self)
         quit_action.triggered.connect(self.quit_app)
         
         tray_menu.addAction(open_action)
         tray_menu.addAction(settings_action)
+        tray_menu.addAction(memory_action)
         tray_menu.addSeparator()
         tray_menu.addAction(quit_action)
         
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.show()
         self.tray_icon.activated.connect(self.on_tray_activated)
+
+    def open_memory_editor(self):
+        from ui.memory_ui import AloneMemoryWindow
+        self.memory_win = AloneMemoryWindow(self)
+        self.memory_win.show()
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:

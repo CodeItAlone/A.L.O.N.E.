@@ -9,6 +9,9 @@ venv/
 history.json
 alone/history.json
 alone/venv/
+alone/data/generated_code/
+alone/data/screenshots/
+alone/test_history.json
 
 # AI Agent metadata
 .agent/

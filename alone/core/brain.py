@@ -156,7 +156,17 @@ class Brain:
         from core import memory
         past_context = memory.retrieve_context(user_message, top_k=3)
         
+        # Retrieve structured human memory context (profile, projects, goals, relationships)
+        try:
+            from core.human_memory import service as human_memory_service
+            structured_context = human_memory_service.get_active_context_summary()
+        except Exception as ex:
+            print(f"[Brain Warning] Failed to import/retrieve structured memory: {ex}")
+            structured_context = ""
+        
         dynamic_system_prompt = self.system_prompt
+        if structured_context:
+            dynamic_system_prompt += f"\n\n{structured_context}"
         if past_context:
             dynamic_system_prompt += f"\n\nRelevant context from past sessions:\n{past_context}"
         
