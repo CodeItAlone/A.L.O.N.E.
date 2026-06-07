@@ -165,7 +165,24 @@ def get_session_summary() -> str:
         return f"I apologize, Sir, but I failed to retrieve today's session summary: {e}"
 
 def save_preference(key: str, value: str):
-    """Saves a preference key-value pair in a separate ChromaDB collection."""
+    """Saves a preference key-value pair, delegating to PreferenceService."""
+    try:
+        from core.preferences_service import preference_service
+        preference_service.save_preference(key, value)
+    except Exception as e:
+        print(f"[Memory Warning] Failed to save preference via service: {e}")
+
+def get_preference(key: str) -> str:
+    """Retrieves a preference by key, delegating to PreferenceService."""
+    try:
+        from core.preferences_service import preference_service
+        return preference_service.get_preference(key)
+    except Exception as e:
+        print(f"[Memory Warning] Failed to retrieve preference via service: {e}")
+        return None
+
+def save_preference_legacy(key: str, value: str):
+    """Saves a preference key-value pair in a separate ChromaDB collection (Legacy)."""
     if pref_col is None:
         return
         
@@ -186,10 +203,10 @@ def save_preference(key: str, value: str):
                 metadatas=[{"key": key}]
             )
     except Exception as e:
-        print(f"[Memory Warning] Failed to save preference '{key}': {e}")
+        print(f"[Memory Warning] Failed to save legacy preference '{key}': {e}")
 
-def get_preference(key: str) -> str:
-    """Retrieves a preference by key from ChromaDB preference collection."""
+def get_preference_legacy(key: str) -> str:
+    """Retrieves a preference by key from ChromaDB preference collection (Legacy)."""
     if pref_col is None:
         return None
         
@@ -200,5 +217,16 @@ def get_preference(key: str) -> str:
             return existing["documents"][0]
         return None
     except Exception as e:
-        print(f"[Memory Warning] Failed to retrieve preference '{key}': {e}")
+        print(f"[Memory Warning] Failed to retrieve legacy preference '{key}': {e}")
         return None
+
+def delete_preference_legacy(key: str):
+    """Deletes a preference key-value pair from ChromaDB preference collection (Legacy)."""
+    if pref_col is None:
+        return
+    try:
+        pref_id = f"pref_{key.lower().strip()}"
+        pref_col.delete(ids=[pref_id])
+    except Exception as e:
+        print(f"[Memory Warning] Failed to delete legacy preference '{key}': {e}")
+
