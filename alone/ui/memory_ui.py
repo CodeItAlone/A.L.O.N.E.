@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QDialog, QLabel, QVBoxLayout, QHBoxLayout,
                              QMessageBox, QHeaderView)
 
 from core.human_memory import database, service
+from core.preferences_service import preference_service
 
 class AloneMemoryWindow(QDialog):
     def __init__(self, parent=None):
@@ -242,7 +243,7 @@ class AloneMemoryWindow(QDialog):
         if not key or not val:
             QMessageBox.warning(self, "Invalid Inputs", "Please enter both key and value, Sir.")
             return
-        database.set_preference(key, val)
+        preference_service.save_preference(key, val)
         self.load_preferences_data()
         key_input.clear()
         val_input.clear()
@@ -252,7 +253,7 @@ class AloneMemoryWindow(QDialog):
         if not key:
             QMessageBox.warning(self, "No Field Selected", "Please select a field to delete, Sir.")
             return
-        database.delete_preference(key)
+        preference_service.delete_preference(key)
         self.load_preferences_data()
         key_input.clear()
         val_input.clear()
