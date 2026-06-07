@@ -65,7 +65,9 @@ class PreferenceService:
         if self.use_structured:
             prefs = database.get_preferences()
             if key_clean in prefs:
-                return prefs[key_clean]["value"]
+                val = prefs[key_clean]["value"]
+                print(f"[Preference Retrieved] key='{key_clean}', value='{val}'")
+                return val
             
             # Fallback to ChromaDB legacy storage to locate legacy preference value
             try:
@@ -74,6 +76,7 @@ class PreferenceService:
                 if legacy_val is not None:
                     # Store it back to structured SQLite storage for the future
                     self.save_preference(key, legacy_val)
+                    print(f"[Preference Retrieved] key='{key_clean}', value='{legacy_val}'")
                     return legacy_val
             except Exception:
                 pass
@@ -83,6 +86,7 @@ class PreferenceService:
                 from core import memory
                 val = memory.get_preference_legacy(key)
                 if val is not None:
+                    print(f"[Preference Retrieved] key='{key_clean}', value='{val}'")
                     return val
             except Exception:
                 pass
@@ -90,6 +94,20 @@ class PreferenceService:
 
     def save_preference(self, key: str, value: str, category: str = None):
         key_clean = key.lower().strip()
+        
+        # Log when saving starts
+        # If it already exists, it is an update
+        exists = False
+        if self.use_structured:
+            prefs = database.get_preferences()
+            exists = key_clean in prefs
+        else:
+            try:
+                from core import memory
+                exists = memory.get_preference_legacy(key) is not None
+            except Exception:
+                pass
+                
         if self.use_structured:
             if not category or category == "general":
                 category = self.KEY_CATEGORIES.get(key_clean, "general")
@@ -100,6 +118,18 @@ class PreferenceService:
                 memory.save_preference_legacy(key, value)
             except Exception:
                 pass
+                
+        # Perform verification immediately
+        verified_val = self.get_preference(key)
+        if verified_val == value:
+            print("[Preference Validation Passed]")
+            if exists:
+                print(f"[Preference Updated] key='{key_clean}', value='{value}'")
+            else:
+                print(f"[Preference Saved] key='{key_clean}', value='{value}'")
+        else:
+            print("[Preference Validation Failed]")
+            print(f"[ERROR] Failed to save/update preference key='{key_clean}' with value='{value}'. Got '{verified_val}'.")
 
     def delete_preference(self, key: str):
         key_clean = key.lower().strip()
