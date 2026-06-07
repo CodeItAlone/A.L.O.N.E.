@@ -10,10 +10,25 @@ import core.memory as memory
 
 @pytest.fixture(autouse=True)
 def setup_mocks():
+    # Save original values
+    orig_memory_col = memory.memory_col
+    orig_pref_col = memory.pref_col
+    
     # Setup mock collections for clean memory testing boundaries
     memory.memory_col = MagicMock()
     memory.pref_col = MagicMock()
+    
+    # Disable structured preferences for legacy ChromaDB memory tests
+    from core.preferences_service import preference_service
+    orig_use_structured = preference_service.use_structured
+    preference_service.use_structured = False
+    
     yield
+    
+    # Restore original values
+    memory.memory_col = orig_memory_col
+    memory.pref_col = orig_pref_col
+    preference_service.use_structured = orig_use_structured
 
 def test_add_memory():
     memory.add_memory("user", "Hello assistant", {"topic": "greeting"})
