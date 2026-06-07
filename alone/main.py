@@ -32,6 +32,8 @@ _shutdown_flag = threading.Event()
 _speech_queue = get_queue()
 _shutting_down = False
 _agent_active = threading.Event()
+_last_command = ""
+_last_response = ""
 
 def handle_audio(audio_path):
     """
@@ -71,6 +73,7 @@ def handle_audio(audio_path):
         
         print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
         
+        global _last_command, _last_response
         if is_active_window:
             print(f"[DEBUG LOGGING] Active listening window active ({time.time() - get_last_interaction_time():.1f}s elapsed). Bypassing wake-word check.")
             # If wake word was spoken, clean it; otherwise use full normalized text as command
@@ -78,11 +81,27 @@ def handle_audio(audio_path):
                 clean_text = clean_command
             else:
                 clean_text = normalized_text
+                
+            # Perform follow-up safety checks
+            if not detected:
+                from core.safety import FollowUpValidationService
+                is_valid, score = FollowUpValidationService.validate_follow_up(
+                    clean_text, _last_command, _last_response, is_active_window=True
+                )
+                if not is_valid:
+                    speak_async("I may have heard background speech. Please repeat the command.")
+                    try:
+                        from ui.window import signals
+                        signals.status_changed.emit("IDLE")
+                    except Exception:
+                        pass
+                    return
         else:
             if detected:
                 clean_text = clean_command
             else:
-                clean_text = clean_command
+                print("[DEBUG LOGGING] Outside active window and no wake word detected. Discarding.")
+                clean_text = ""
                 
         print(f"[DEBUG LOGGING] Command extraction result: '{clean_text}'")
         # ----------------------------------------------------
@@ -143,6 +162,10 @@ def handle_audio(audio_path):
                 output = str(result)
                 
             print(f"[DEBUG LOGGING] Intent routing & Action execution result: '{output}'")
+            
+            # Update history for safety context relevance
+            _last_command = clean_text
+            _last_response = output
             
             # Update active window timer on successful command execution
             update_last_interaction_time()

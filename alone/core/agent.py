@@ -432,6 +432,12 @@ Thought:{agent_scratchpad}"""
             if preferences_context:
                 final_input = f"{preferences_context}\n\nUser Request: {user_input}"
                 
+            # Safety checks before invoking the agent/tools
+            from core.safety import FollowUpValidationService
+            if not FollowUpValidationService.verify_tool_execution(user_input):
+                print("[Tool Execution Blocked]")
+                return "Sir, I may have heard background speech. Please repeat the command."
+
             result = self.agent_executor.invoke({
                 "input": final_input
             })
