@@ -226,6 +226,7 @@ def _play_beep():
     try:
         sd.play(beep, sample_rate)
         sd.wait()
+        time.sleep(0.25)  # Warm-up delay to allow audio output to clear before starting input stream
     except Exception as e:
         print(f"[!] Failed to play beep: {e}")
 
@@ -305,14 +306,15 @@ def record_until_silence():
                 
                 # Check for start
                 if not speech_detected:
-                    if sum(ring_buffer) >= 3:
-                        speech_detected = True
-                        print("[ALONE] Speech detected... 🎤")
-                        try:
-                            from ui.window import signals
-                            signals.status_changed.emit("RECORDING")
-                        except Exception:
-                            pass
+                    if total_frames > 8:  # Ignore first 8 frames (240ms) to avoid stream init pops/clicks
+                        if sum(ring_buffer) >= 3:
+                            speech_detected = True
+                            print("[ALONE] Speech detected... 🎤")
+                            try:
+                                from ui.window import signals
+                                signals.status_changed.emit("RECORDING")
+                            except Exception:
+                                pass
                 else:
                     # Check for end
                     if not is_speech:

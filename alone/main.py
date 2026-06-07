@@ -315,19 +315,7 @@ def main():
     
     # 4. Bind the speech queue drain process to a main thread QTimer (avoids COM errors)
     def speech_timer_tick():
-        if not get_queue().empty():
-            try:
-                signals.status_changed.emit("SPEAKING")
-            except Exception:
-                pass
-            process_speech_queue()
-            try:
-                if _agent_active.is_set():
-                    signals.status_changed.emit("THINKING")
-                else:
-                    signals.status_changed.emit("IDLE")
-            except Exception:
-                pass
+        pass
                 
     timer = QTimer()
     timer.timeout.connect(speech_timer_tick)
