@@ -121,19 +121,24 @@ All A.L.O.N.E. tools inherit from LangChain's `@tool` decorator. Add your new to
 
 3. **Reload A.L.O.N.E.**: Restart `main.py` and the assistant will automatically register and describe the tool to the LLM during runtime!
 
-## ⚙️ Robust Synchronization & VAD Fixes
+## ⚙️ Robust Synchronization & Safety Refinements
 
-To guarantee smooth hands-free desktop operations and prevent continuous loop locks, we implemented two key architectural refinements:
+To guarantee smooth hands-free desktop operations and prevent background noise loop locks, we implemented three key architectural refinements:
 
-1. **Systematic Wake Word Verification in Active Listening**:
-   Refined the continuous VAD Fallback listening engine inside `core/listener.py` to prioritize wake word matching even during the 15-second follow-up window. This ensures that saying "hey alone" to trigger a new command plays the chime immediately, resets the standby recording loop, and captures the fresh command cleanly without returning early to `IDLE` or causing Whisper to transcribe hallucinated static noise (like *"I'll see you"*).
-2. **Global Platform Resolution**:
-   Fixed settings GUI startup path shortcuts by resolving a local scope NameError in `alone/ui/settings.py` for `platform.system()`, migrating OS detection to a clean global import.
+1. **Active Window Safety Layer**:
+   Created `FollowUpValidationService` ([core/safety.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/safety.py)) to score transcribed commands. Ambient audio phrases ("thanks for watching", "like and subscribe") are assigned a low confidence level and discarded, preventing random typing or unwanted automation.
+2. **Dedicated Background TTS Worker**:
+   Refactored the speech output engine in [core/speaker.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/speaker.py) to run on a dedicated background thread. Speech synthesis is handled completely asynchronously, avoiding blocking PyQt5 window visualizers and resolving previous thread-crossover COM crashes.
+3. **SQLite Structured Preference Memory**:
+   Introduced a local SQLite database for structured preferences inside `core/human_memory/` with validation logs (`[Preference Saved]`, `[Preference Validation Passed]`) and automatic migration of legacy preferences from ChromaDB.
 
 ---
 
-## ⚠️ Known Limitations
+## ⚠️ Limitations & Workarounds
 
-1. **Speech Queue apartment COM locks**: SAPI5 speech synthesis is restricted strictly to the Main Thread event loop (managed via QTimers) to prevent access violation crashes during thread crossovers.
-2. **Device Stream Locks**: On Windows, default audio devices will lock exclusively during pyttsx3 speech operations, blocking simultaneous Whisper listener audio stream binding. A.L.O.N.E. bypasses this by closing and tearing down active `InputStream` bindings during pause/resume state cycles.
-3. **Frameless Window Draggability**: HUD Window does not have standard OS frame handles. Double-click and drag the container frame directly to reposition it on screen.
+1. **Active Listening Window Duration**:
+   A.L.O.N.E. operates with a default active follow-up window (configurable, recommended at **5 seconds** for safety). Validation prevents background audio leakages during this active window.
+2. **Device Stream Locks**:
+   Windows audio devices lock during PyTTSx3 speaking. A.L.O.N.E. handles this by pausing microphone input stream binding during active speaking and resuming after speech completes.
+3. **Frameless Window Draggability**:
+   The floating HUD window does not have standard OS frame handles. Double-click and drag the container frame directly to reposition it on screen.

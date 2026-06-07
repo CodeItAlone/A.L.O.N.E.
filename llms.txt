@@ -1,0 +1,16 @@
+# A.L.O.N.E.
+> An Autonomous, Local-First AI Voice Assistant with Computer Control & Floating HUD.
+
+## Core Files
+- [alone/main.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/main.py): Application entrypoint and PyQt5 event loop
+- [alone/core/agent.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/agent.py): ReAct Agent executor and prompt context injector
+- [alone/core/preferences_service.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/preferences_service.py): SQLite preference manager and ChromaDB fallback migration
+- [alone/core/safety.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/safety.py): Active window validation and confidence scorer
+- [alone/core/speaker.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/speaker.py): Background TTS thread speaker and queue processor
+- [alone/core/listener.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/listener.py): openWakeWord and WebRTC VAD voice capture thread
+- [alone/core/human_memory/database.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/human_memory/database.py): SQLite structured relational database CRUD
+
+## Key Concepts
+- **Active Listening Bypass**: Inside the active follow-up window (default 15s, recommended 5s), the wake word is bypassed, accepting direct follow-ups.
+- **Safety Layer**: Follow-ups undergo validation checks to filter out video speech/ambient noises (confidence matching and relevance analysis).
+- **Background Speech Synthesis**: pyttsx3 runs on a background thread using COM subprocess execution on Windows to prevent GUI freezing.

@@ -33,52 +33,45 @@ The database is built on **ChromaDB** and uses **SentenceTransformers** to compu
 
 ---
 
-## 💾 Core Memory Structures (Collections)
+## 💾 Core Memory Structures (Hybrid System)
 
-A.L.O.N.E. separates stored data into two distinct collections inside the vector database:
+A.L.O.N.E. separates stored data into two distinct database layers:
 
-1.  **`alone_memory`**: Stores user inputs, assistant replies, and intermediate system tool execution results. Each item is tagged with metadata (timestamp, date, execution role).
-2.  **`alone_preferences`**: Key-value metadata storage. Used to remember explicit facts (e.g. user name, favorite apps, main project directories).
+1.  **`alone_memory` (ChromaDB Vector DB)**: Stores conversational logs, user inputs, and intermediate system tool executions. Used for similarity searches and dynamically injecting past context.
+2.  **`preferences` (SQLite Database)**: Stores personal preference settings inside a local SQLite database (`~/.alone/human_memory.db`). Features structured category mappings (`development`, `communication`, `assistant`, `productivity`, `general`) to store verified preference facts.
 
 ---
 
 ## 🔄 Memory Processes
 
-### 1. The Storage Process
-Every conversation exchange and tool result is committed to memory using the `add_memory` function:
+### 1. SQLite Preference Storage & Verification
+Preferences are managed by `PreferenceService` ([core/preferences_service.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/preferences_service.py)):
+*   **Write**: Values are written using SQL `INSERT INTO ... ON CONFLICT(key) DO UPDATE` to guarantee overwrite safety and prevent duplicate records.
+*   **Validation Check**: The database is queried immediately post-save to verify that the value matches the request. Output is logged as `[Preference Validation Passed]` or `[Preference Validation Failed]`.
+*   **Migration**: On startup, a background synchronization routine copies legacy ChromaDB preferences over to SQLite structured tables.
 
-*   **Id Generation**: A unique identifier is generated using `uuid.uuid4()` (e.g. `mem_xxxx-xxxx-xxxx`).
-*   **Vectorization**: The text content is converted into a 384-dimensional vector array.
-*   **Commit**: Stored with metadata (timestamp, date-string, actor role) inside the ChromaDB collection:
-    ```python
-    meta = {
-        "role": role,
-        "timestamp": time.time(),
-        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    ```
+### 2. Conversational Storage & Retrieval
+Every conversational turn is vectorized using SentenceTransformers and saved in the ChromaDB vector database. When a user sends a general query, ChromaDB performs a similarity search to inject historical context into the prompt:
+```plaintext
+=== USER PREFERENCES ===
+[Development Preferences]:
+  * editor: VS Code
+  * programming_language: Python
 
-### 2. The Semantic Retrieval Process
-Before executing any LLM agent logic, A.L.O.N.E. queries past memories to fetch historical context:
-
-*   **Query Vectorization**: The incoming user prompt is encoded into a 384-dim vector.
-*   **Similarity Match**: ChromaDB performs a cosine-similarity distance search against all stored records in `alone_memory`.
-*   **Dynamic Prompt Injection**: The top-3 matches are retrieved, formatted chronologically, and injected directly into the LLM system prompt as context:
-    ```plaintext
-    Relevant context from past sessions:
-    [2026-05-28 14:10:05] User: My primary project path is C:\Users\Shan\Desktop\Project
-    [2026-05-28 14:10:32] Assistant: Understood, Sir. I will remember that path.
-    ```
+[Communication Preferences]:
+  * user_name: Shan
+========================
+```
 
 ---
 
 ## 📈 Advantages and Limitations
 
 ### Advantages:
-*   **Absolute Privacy**: Vector storage and text similarity calculations are performed 100% offline. No data is sent to external clouds.
-*   **Cross-Session Persistence**: A.L.O.N.E. does not suffer from "amnesia" on reboot. It retains your preferences, directory structures, and names permanently.
-*   **Low Footprint**: ChromaDB and `all-MiniLM-L6-v2` load in less than 2 seconds and occupy minimal RAM (~120MB total).
+*   **Absolute Privacy**: All database writes and queries are performed locally on-disk.
+*   **Overwriting Overwrite Safety**: Categorized preferences are kept unique per-key using SQLite relational rules.
+*   **Low footprint**: ChromaDB and SQLite operate in-memory/on-disk with less than 2 seconds initialization.
 
 ### Limitations:
-*   **Context Window Bloat**: Injecting highly detailed past context consumes LLM context tokens.
-*   **No Multi-User Separation**: Currently runs on a single user profile based on the OS home directory (`~`).
+*   **Context Window Bloat**: Injected past context consumes LLM tokens.
+*   **Single User Profile**: System is limited to a single user profile mapped to the OS home directory (`~`).

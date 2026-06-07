@@ -27,7 +27,9 @@ A.L.O.N.E. acts as an offline hardware-linked digital butler modeled after scien
 *   **🎙️ Always-On OWW Detection**: Low-overhead wake-word detection using `openwakeword` with both custom trained and fallback chimes.
 *   **🎤 Smart Silence Cutoff (VAD)**: Dynamic capture driven by WebRTC VAD and audio energy calibration. Stops recording immediately (600ms) after you stop speaking and limits recording duration to a hard 9-second window.
 *   **🧠 Local LLM ReAct Agent**: Runs `alone-model` (derived from llama3.2:3b) locally via ChatOllama, reasoning and selecting system tools dynamically.
-*   **💾 Cross-Session Semantic Memory**: Integrates an offline ChromaDB vector database and local SentenceTransformers (`all-MiniLM-L6-v2`) to recall past interactions, settings, and files.
+*   **💾 Hybrid Semantic & Structured Memory**: Combines an offline ChromaDB vector database for conversational history and a structured **SQLite database** to store and update categorized user preferences (editor, programming language, user name, etc.) with automatic legacy ChromaDB preference migration.
+*   **🛡️ Active Window Safety Layer**: Features a robust confidence-scoring safety layer (`FollowUpValidationService`) to filter out ambient noise and video transcripts (e.g. "thanks for watching", "like and subscribe") from triggering accidental tool execution or agent reasoning during active listening windows.
+*   **🔊 Non-Blocking Background TTS Thread**: Utilizes a dedicated background worker thread to execute pyttsx3 speech synthesis asynchronously, avoiding main-thread COM/GUI locks and dispatching HUD visualizer status updates.
 *   **⚡ Zero-Latency Quick Commands**: Intercepts common instructions (time, date, screenshot, opening YouTube/GitHub/VS Code) to execute them instantly under 1 second, bypassing LLM inference.
 *   **🖥️ Circular HUD Interface**: A sleek, minimal PyQt5 HUD bubble that animates and responds to voice activity.
 *   **🚀 Background Boot Warm-up**: Pre-warms the Whisper RAM and Ollama VRAM in parallel on background threads right at startup. Announce ready status chimes inside 20 seconds.
@@ -41,15 +43,18 @@ graph TD
     User([User Speech]) -->|Hey Alone!| Listener[core.listener: Mic Thread]
     Listener -->|Trigger Beep| VAD[VAD Command Capture]
     VAD -->|Temp WAV Path| Transcriber[core.transcriber: Whisper]
-    Transcriber -->|Transcript Text| Agent[core.agent: ReAct Executor]
+    Transcriber -->|Transcript Text| SafetyCheck{Safety Validation Layer}
     
-    Agent -->|1. Direct Bypass| QuickCmds[QUICK_COMMANDS Dict]
+    SafetyCheck -->|Low Confidence / Background| Warn[Speak Safety Warning & Reset]
+    SafetyCheck -->|High Confidence / Verified| Agent[core.agent: ReAct Agent]
+    
+    Agent -->|1. Direct Bypass / Prefs| QuickCmds[QUICK_COMMANDS / SQLite DB]
     Agent -->|2. Fallback LLM| Ollama[core.brain: ChatOllama]
     
     Ollama -->|Inject Context| VectorDB[core.memory: ChromaDB]
     Agent -->|System Control| Tools[tools/: Automation Tools]
     
-    QuickCmds -->|Enqueue TTS| Speaker[core.speaker: pyttsx3 main thread]
+    QuickCmds -->|Enqueue TTS| Speaker[core.speaker: Background TTS Thread]
     Ollama -->|Enqueue TTS| Speaker
     Speaker -->|Output Audio| UsersAudio([System Speakers])
 ```
@@ -63,11 +68,15 @@ C:\Users\SHAN KUMAR\Desktop\ALONE
 ├── docs/                      # Technical documentation
 │   ├── ARCHITECTURE.md        # High-level component map
 │   ├── DEVELOPER_GUIDE.md     # Code reviews, folder setups
-│   ├── MEMORY_SYSTEM.md       # Vector database and embeddings
+│   ├── MEMORY_SYSTEM.md       # Vector database and SQLite schema
 │   ├── PROJECT_OVERVIEW.md    # Features and target scope
 │   ├── ROADMAP.md             # Development priorities
 │   └── VOICE_PIPELINE.md      # Voice sequence processing
 └── alone/                     # Application source directory
+    ├── core/
+    │   ├── human_memory/      # SQLite structured preference database
+    │   ├── safety.py          # Active window safety validation service
+    │   └── ...
     ├── Modelfile              # Ollama model definition
     ├── config.yaml            # Sound, VAD, and model thresholds
     ├── main.py                # App entrypoint and GUI event loop
