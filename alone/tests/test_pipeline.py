@@ -35,4 +35,7 @@ def test_pipeline_react_loop(mock_init):
     # Verify outputs
     assert "Sir," in res
     assert "clean" in res
-    agent.agent_executor.invoke.assert_called_once_with({"input": "Check my files"})
+    agent.agent_executor.invoke.assert_called_once()
+    call_args = agent.agent_executor.invoke.call_args[0][0]
+    assert "Check my files" in call_args["input"]
+    assert "preferences_context" not in call_args
