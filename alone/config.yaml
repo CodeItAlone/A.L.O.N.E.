@@ -50,3 +50,7 @@ vad:
   mode: 2
   max_silent_frames: 20
   max_total_frames: 300
+
+features:
+  use_structured_preferences: true
+
