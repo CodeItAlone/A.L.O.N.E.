@@ -163,10 +163,20 @@ class Brain:
         except Exception as ex:
             print(f"[Brain Warning] Failed to import/retrieve structured memory: {ex}")
             structured_context = ""
+            
+        # Retrieve structured user preferences context
+        try:
+            from core.preferences_service import preference_service
+            preferences_context = preference_service.get_formatted_context()
+        except Exception as ex:
+            print(f"[Brain Warning] Failed to retrieve user preferences: {ex}")
+            preferences_context = ""
         
         dynamic_system_prompt = self.system_prompt
         if structured_context:
             dynamic_system_prompt += f"\n\n{structured_context}"
+        if preferences_context:
+            dynamic_system_prompt += f"\n\n{preferences_context}"
         if past_context:
             dynamic_system_prompt += f"\n\nRelevant context from past sessions:\n{past_context}"
         
