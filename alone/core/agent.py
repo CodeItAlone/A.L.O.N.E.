@@ -245,6 +245,111 @@ Thought:{agent_scratchpad}"""
             memory=self.memory
         )
 
+    def handle_preference_query(self, cleaned_input: str) -> str:
+        import re
+        from core.preferences_service import preference_service
+        
+        # 1. Editor query
+        editor_pattern = r"(?:what\s+is\s+my\s+preferred\s+(?:code\s+)?editor|which\s+editor\s+do\s+i\s+use|what\s+editor\s+do\s+i\s+use)"
+        if re.search(editor_pattern, cleaned_input):
+            print(f"[Preference Intent Detected] query='{cleaned_input}'")
+            editor = preference_service.get_preference("editor") or preference_service.get_preference("ide")
+            if editor:
+                return f"Sir, your preferred editor is {editor}."
+            else:
+                return "Sir, I do not have a record of your preferred editor yet. You can set it by saying: 'My preferred editor is VS Code'."
+
+        # 2. Programming language query
+        lang_pattern = r"(?:what\s+programming\s+language\s+do\s+i\s+prefer|what\s+is\s+my\s+preferred\s+(?:programming\s+)?language)"
+        if re.search(lang_pattern, cleaned_input):
+            print(f"[Preference Intent Detected] query='{cleaned_input}'")
+            lang = preference_service.get_preference("programming_language")
+            if lang:
+                return f"Sir, your preferred programming language is {lang}."
+            else:
+                return "Sir, I do not have a record of your preferred programming language yet. You can set it by saying: 'My preferred language is Python'."
+
+        # 3. All setup / preferences query
+        setup_pattern = r"(?:what\s+are\s+my\s+preferences|tell\s+me\s+about\s+my\s+setup)"
+        if re.search(setup_pattern, cleaned_input):
+            print(f"[Preference Intent Detected] query='{cleaned_input}'")
+            prefs = preference_service.get_all_preferences()
+            if prefs:
+                lines = [f"- **{k}**: {v}" for k, v in sorted(prefs.items())]
+                formatted = "\n".join(lines)
+                return f"Sir, here are your current configuration preferences:\n\n{formatted}"
+            else:
+                return "Sir, you haven't saved any preferences yet. You can set some, such as your name, preferred editor, or project path."
+
+        return None
+
+    def handle_preference_update(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.preferences_service import preference_service
+        
+        # 1. Name update
+        name_match = re.search(r"(?:alone\s+)?remember\s+that\s+my\s+name\s+is\s+([a-zA-Z\s]+)", cleaned_input)
+        if name_match:
+            print(f"[Preference Update Detected] query='{cleaned_input}'")
+            name = name_match.group(1).strip().title()
+            preference_service.save_preference("user_name", name)
+            return f"Understood, Sir. I will remember that your name is {name}."
+
+        # 2. Project path update
+        project_match = re.search(r"my\s+project\s+path\s+is\s+['\"#]?([a-zA-Z]:\\[^'\"]+)['\"#]?", raw_input, re.IGNORECASE)
+        if project_match:
+            print(f"[Preference Update Detected] query='{cleaned_input}'")
+            path = project_match.group(1).strip()
+            preference_service.save_preference("project_path", path)
+            return f"Understood, Sir. I have updated your project path to {path}."
+
+        # 3. Frequent app update
+        app_match = re.search(r"(?:my\s+favorite\s+app\s+is|frequent\s+app\s+is)\s+([a-zA-Z0-9\s]+)", cleaned_input)
+        if app_match:
+            print(f"[Preference Update Detected] query='{cleaned_input}'")
+            app = app_match.group(1).strip().title()
+            preference_service.save_preference("frequent_app", app)
+            return f"Understood, Sir. I have updated your frequent app to {app}."
+
+        # 4. Editor/IDE updates
+        editor_patterns = [
+            r"my\s+preferred\s+(?:code\s+)?editor\s+is\s+([a-zA-Z0-9\s\.\-_]+)",
+            r"my\s+preferred\s+ide\s+is\s+([a-zA-Z0-9\s\.\-_]+)",
+            r"i\s+use\s+([a-zA-Z0-9\s\.\-_]+)\s+now"
+        ]
+        for pat in editor_patterns:
+            match = re.search(pat, cleaned_input)
+            if match:
+                print(f"[Preference Update Detected] query='{cleaned_input}'")
+                editor_val = match.group(1).strip()
+                # If they say "VS Code" keep it as title, but respect lowercase abbreviations or titles
+                editor_val = editor_val.title() if len(editor_val) > 4 else editor_val.upper()
+                if "Vs Code" in editor_val:
+                    editor_val = "VS Code"
+                preference_service.save_preference("editor", editor_val)
+                return f"Understood, Sir. I have updated your preferred editor to {editor_val}."
+                
+        # 5. Programming language updates
+        lang_patterns = [
+            r"my\s+preferred\s+(?:programming\s+)?language\s+is\s+([a-zA-Z0-9\s\.\-#\+]+)",
+            r"i\s+mostly\s+code\s+in\s+([a-zA-Z0-9\s\.\-#\+]+)",
+            r"i\s+prefer\s+([a-zA-Z0-9\s\.\-#\+\s]+)",
+            r"i\s+switched\s+to\s+([a-zA-Z0-9\s\.\-#\+]+)"
+        ]
+        for pat in lang_patterns:
+            match = re.search(pat, cleaned_input)
+            if match:
+                print(f"[Preference Update Detected] query='{cleaned_input}'")
+                lang_val = match.group(1).strip()
+                if lang_val.lower() in ["c#", "c++", "js", "ts", "html", "css"]:
+                    lang_val = lang_val.upper()
+                else:
+                    lang_val = lang_val.title()
+                preference_service.save_preference("programming_language", lang_val)
+                return f"Understood, Sir. I have updated your preferred programming language to {lang_val}."
+
+        return None
+
     def run(self, user_input):
         try:
             # Set the latest query for tool safety boundaries
@@ -291,6 +396,15 @@ Thought:{agent_scratchpad}"""
                     f"You can speak your instructions or type them in the console."
                 )
 
+            # --- PREFERENCE INTENT ROUTING & UPDATE BYPASS ---
+            pref_query_res = self.handle_preference_query(cleaned_input)
+            if pref_query_res is not None:
+                return pref_query_res
+                
+            pref_update_res = self.handle_preference_update(cleaned_input, user_input)
+            if pref_update_res is not None:
+                return pref_update_res
+
             # --- CUSTOM COMMAND: ALONE what do you remember? ---
             if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
                 from core import memory
@@ -299,35 +413,28 @@ Thought:{agent_scratchpad}"""
                 if "No memories" in summary:
                     return "Sir, I do not remember anything recorded from today yet."
                 return f"Sir, here are the memories I recorded today:\n\n{summary}"
-                
-            # --- CUSTOM COMMAND: ALONE remember that my name is [name] ---
-            import re
-            name_match = re.search(r"(?:alone\s+)?remember\s+that\s+my\s+name\s+is\s+([a-zA-Z\s]+)", user_input.lower())
-            if name_match:
-                name = name_match.group(1).strip().title()
-                from core import memory
-                print(f"[DEBUG LOGGING] Custom remember name command detected: '{name}'")
-                memory.save_preference("user_name", name)
-                return f"Understood, Sir. I will remember that your name is {name}."
-                
-            # Pattern-match other preference categories (paths, frequent apps) mentioned in voice/text
-            project_match = re.search(r"my\s+project\s+path\s+is\s+['\"#]?([a-zA-Z]:\\[^'\"]+)['\"#]?", user_input, re.IGNORECASE)
-            if project_match:
-                path = project_match.group(1).strip()
-                from core import memory
-                print(f"[DEBUG LOGGING] Custom remember project path command detected: '{path}'")
-                memory.save_preference("project_path", path)
-                
-            app_match = re.search(r"(?:my\s+favorite\s+app\s+is|frequent\s+app\s+is)\s+([a-zA-Z0-9\s]+)", user_input, re.IGNORECASE)
-            if app_match:
-                app = app_match.group(1).strip()
-                from core import memory
-                print(f"[DEBUG LOGGING] Custom remember frequent app command detected: '{app}'")
-                memory.save_preference("frequent_app", app)
             
             # Clean input for the agent
             print(f"[DEBUG LOGGING] Calling LLM/Agent Executor for command: '{user_input}'")
-            result = self.agent_executor.invoke({"input": user_input})
+            
+            # Inject dynamic preference context into prompt variables
+            try:
+                from core.preferences_service import preference_service
+                preferences_context = preference_service.get_formatted_context()
+            except Exception:
+                preferences_context = ""
+                
+            if preferences_context:
+                print("[Preference Context Injected]")
+                
+            # Prepend preferences directly into prompt input to avoid LangChain crash
+            final_input = user_input
+            if preferences_context:
+                final_input = f"{preferences_context}\n\nUser Request: {user_input}"
+                
+            result = self.agent_executor.invoke({
+                "input": final_input
+            })
             output = result["output"]
             print(f"[DEBUG LOGGING] LLM/Agent response received: '{output}'")
             
