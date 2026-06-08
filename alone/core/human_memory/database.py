@@ -49,6 +49,8 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             status TEXT CHECK(status IN ('active', 'completed', 'paused', 'archived')) DEFAULT 'active',
+            phase TEXT DEFAULT '',
+            priority TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -81,6 +83,14 @@ def init_db():
         );
         """)
         
+        # Ensure phase and priority columns exist for older databases
+        cursor.execute("PRAGMA table_info(projects)")
+        columns = [row["name"] for row in cursor.fetchall()]
+        if "phase" not in columns:
+            cursor.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT ''")
+        if "priority" not in columns:
+            cursor.execute("ALTER TABLE projects ADD COLUMN priority TEXT DEFAULT ''")
+
         conn.commit()
         conn.close()
 
@@ -158,33 +168,45 @@ def get_projects(status=None):
         conn = get_connection()
         cursor = conn.cursor()
         if status:
-            cursor.execute("SELECT id, name, description, status, created_at, updated_at FROM projects WHERE status = ?", (status,))
+            cursor.execute("SELECT id, name, description, status, phase, priority, created_at, updated_at FROM projects WHERE status = ?", (status,))
         else:
-            cursor.execute("SELECT id, name, description, status, created_at, updated_at FROM projects")
+            cursor.execute("SELECT id, name, description, status, phase, priority, created_at, updated_at FROM projects")
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
 
-def add_project(project_id, name, description, status="active"):
+def add_project(project_id, name, description, status="active", phase="", priority=""):
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
-        INSERT INTO projects (id, name, description, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (project_id, name, description, status, now, now))
+        INSERT INTO projects (id, name, description, status, phase, priority, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (project_id, name, description, status, phase, priority, now, now))
         conn.commit()
         conn.close()
 
-def update_project(project_id, name, description, status):
+def update_project(project_id, name, description, status, phase=None, priority=None):
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-        UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ? WHERE id = ?
-        """, (name, description, status, now, project_id))
+        
+        query = "UPDATE projects SET name = ?, description = ?, status = ?, updated_at = ?"
+        params = [name, description, status, now]
+        
+        if phase is not None:
+            query += ", phase = ?"
+            params.append(phase)
+        if priority is not None:
+            query += ", priority = ?"
+            params.append(priority)
+            
+        query += " WHERE id = ?"
+        params.append(project_id)
+        
+        cursor.execute(query, tuple(params))
         conn.commit()
         conn.close()
 
