@@ -350,6 +350,153 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def handle_project_intents(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.project_memory_service import project_memory_service
+        from core.human_memory import database
+
+        # 1. Project Create Intent
+        create_match = re.match(
+            r"(?:alone\s+)?(?:create|start|new)\s+project\s+([a-zA-Z0-9_\-\.\s]+?)(?:\s+(?:with|desc|description|phase|priority).*)?$",
+            raw_input.strip(),
+            re.IGNORECASE
+        )
+        if create_match:
+            name = create_match.group(1).strip()
+            phase = ""
+            priority = ""
+            description = ""
+
+            desc_match = re.search(r"(?:desc|description)\s+(?:of\s+|is\s+|to\s+)?['\"]?([^'\"]+?)['\"]?(?:\s+(?:phase|priority)|$)", raw_input, re.IGNORECASE)
+            if desc_match:
+                description = desc_match.group(1).strip()
+
+            phase_match = re.search(r"phase\s+(?:of\s+|is\s+|to\s+)?([a-zA-Z0-9\._\-]+)", raw_input, re.IGNORECASE)
+            if phase_match:
+                phase = phase_match.group(1).strip()
+
+            prio_match = re.search(r"priority\s+(?:of\s+|is\s+|to\s+)?([a-zA-Z0-9\._\-]+)", raw_input, re.IGNORECASE)
+            if prio_match:
+                priority = prio_match.group(1).strip().capitalize()
+
+            p = project_memory_service.create_project(name, description, phase, priority)
+            return f"Understood, Sir. I have created the project '{p['name']}' and set it as active."
+
+        # 2. Project Update/Set/Archive/Delete Intents
+        archive_match = re.search(
+            r"(?:alone\s+)?archive\s+project\s+([a-zA-Z0-9_\-\.\s]+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if archive_match:
+            project_name_or_id = archive_match.group(1).strip()
+            p = project_memory_service.get_project(project_name_or_id)
+            if not p:
+                return f"Sir, I could not find a project named '{project_name_or_id}'."
+            project_memory_service.archive_project(p["id"])
+            return f"Understood, Sir. I have archived the project '{p['name']}'."
+
+        delete_match = re.search(
+            r"(?:alone\s+)?delete\s+project\s+([a-zA-Z0-9_\-\.\s]+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if delete_match:
+            project_name_or_id = delete_match.group(1).strip()
+            p = project_memory_service.get_project(project_name_or_id)
+            if not p:
+                return f"Sir, I could not find a project named '{project_name_or_id}'."
+            project_memory_service.delete_project(p["id"])
+            return f"Understood, Sir. I have deleted the project '{p['name']}'."
+
+        update_match = re.search(
+            r"(?:alone\s+)?(?:update|set)\s+project\s+([a-zA-Z0-9_\-\.\s]+?)\s+(phase|priority|status|description|desc)\s+(?:to\s+|as\s+)?(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if update_match:
+            project_name_or_id = update_match.group(1).strip()
+            field = update_match.group(2).strip().lower()
+            value = update_match.group(3).strip()
+
+            p = project_memory_service.get_project(project_name_or_id)
+            if not p:
+                return f"Sir, I could not find a project named '{project_name_or_id}'."
+
+            kwargs = {}
+            if field == "desc" or field == "description":
+                val_raw_match = re.search(rf"{field}\s+(?:to\s+|as\s+)?(.+)", raw_input, re.IGNORECASE)
+                kwargs["description"] = val_raw_match.group(1).strip() if val_raw_match else value
+            elif field == "phase":
+                kwargs["phase"] = value
+            elif field == "priority":
+                kwargs["priority"] = value.capitalize()
+            elif field == "status":
+                status_lower = value.lower()
+                if status_lower not in ["active", "completed", "paused", "archived"]:
+                    return f"Sir, status must be one of active, completed, paused, or archived."
+                kwargs["status"] = status_lower
+
+            project_memory_service.update_project(p["id"], **kwargs)
+            updated_p = project_memory_service.get_project(p["id"])
+            display_field = "description" if field == "desc" else field
+            return f"Understood, Sir. I have updated the project '{updated_p['name']}' {display_field} to '{updated_p[display_field]}'."
+
+        # 3. Project Status/List Intents
+        if cleaned_input in [
+            "list my projects", "list projects", "what projects do i have", "what projects do i have?",
+            "show my projects", "show projects", "show active projects", "project list"
+        ]:
+            projects = database.get_projects()
+            if not projects:
+                return "Sir, you have no recorded projects at this time."
+            lines = []
+            for p in projects:
+                desc_str = f" - {p['description']}" if p['description'] else ""
+                phase_str = f" | Phase: {p['phase']}" if p['phase'] else ""
+                prio_str = f" | Priority: {p['priority']}" if p['priority'] else ""
+                lines.append(f"- **{p['name']}** (ID: {p['id']}, Status: {p['status']}){phase_str}{prio_str}{desc_str}")
+            return "Sir, here are your current projects:\n\n" + "\n".join(lines)
+
+        status_match = re.search(
+            r"(?:alone\s+)?(?:what\s+is\s+the\s+)?status\s+of\s+project\s+([a-zA-Z0-9_\-\.\s]+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if not status_match:
+            status_match = re.search(
+                r"(?:alone\s+)?project\s+status\s+([a-zA-Z0-9_\-\.\s]+)",
+                raw_input,
+                re.IGNORECASE
+            )
+        if status_match:
+            project_name_or_id = status_match.group(1).strip()
+            p = project_memory_service.get_project(project_name_or_id)
+            if not p:
+                return f"Sir, I could not find a project named '{project_name_or_id}'."
+            desc_str = f"\nDescription: {p['description']}" if p['description'] else ""
+            phase_str = f"\nPhase: {p['phase']}" if p['phase'] else ""
+            prio_str = f"\nPriority: {p['priority']}" if p['priority'] else ""
+            return f"Sir, the status of project '{p['name']}' is '{p['status']}'.{phase_str}{prio_str}{desc_str}"
+
+        # 4. Project Query/Details Intent
+        query_match = re.search(
+            r"(?:alone\s+)?(?:tell\s+me\s+about|show|details\s+of|info\s+on)\s+project\s+([a-zA-Z0-9_\-\.\s]+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if query_match:
+            project_name_or_id = query_match.group(1).strip()
+            p = project_memory_service.get_project(project_name_or_id)
+            if not p:
+                return f"Sir, I could not find a project named '{project_name_or_id}'."
+            desc_str = f"\nDescription: {p['description']}" if p['description'] else ""
+            phase_str = f"\nPhase: {p['phase']}" if p['phase'] else ""
+            prio_str = f"\nPriority: {p['priority']}" if p['priority'] else ""
+            return f"Sir, here are the details for project '{p['name']}':\nID: {p['id']}\nStatus: {p['status']}{phase_str}{prio_str}{desc_str}"
+
+        return None
+
     def run(self, user_input):
         try:
             # Set the latest query for tool safety boundaries
@@ -405,6 +552,11 @@ Thought:{agent_scratchpad}"""
             if pref_update_res is not None:
                 return pref_update_res
 
+            # --- PROJECT INTENT ROUTING BYPASS ---
+            proj_res = self.handle_project_intents(cleaned_input, user_input)
+            if proj_res is not None:
+                return proj_res
+
             # --- CUSTOM COMMAND: ALONE what do you remember? ---
             if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
                 from core import memory
@@ -426,11 +578,28 @@ Thought:{agent_scratchpad}"""
                 
             if preferences_context:
                 print("[Preference Context Injected]")
+
+            # Inject active project context
+            try:
+                from core.project_memory_service import project_memory_service
+                project_context = project_memory_service.get_active_project_context()
+            except Exception as e:
+                print(f"[Project Context Injection Warning] Failed: {e}")
+                project_context = ""
+
+            if project_context:
+                print("[Project Context Injected]")
                 
-            # Prepend preferences directly into prompt input to avoid LangChain crash
+            # Prepend context directly into prompt input to avoid LangChain crash
             final_input = user_input
+            context_blocks = []
+            if project_context:
+                context_blocks.append(project_context)
             if preferences_context:
-                final_input = f"{preferences_context}\n\nUser Request: {user_input}"
+                context_blocks.append(preferences_context)
+                
+            if context_blocks:
+                final_input = "\n\n".join(context_blocks) + f"\n\nUser Request: {user_input}"
                 
             # Safety checks before invoking the agent/tools
             from core.safety import FollowUpValidationService
