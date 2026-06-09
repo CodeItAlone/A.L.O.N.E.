@@ -66,6 +66,7 @@ class PreferenceService:
             prefs = database.get_preferences()
             if key_clean in prefs:
                 val = prefs[key_clean]["value"]
+                print(f"[MEMORY RETRIEVE] key='{key_clean}', value='{val}'")
                 print(f"[Preference Retrieved] key='{key_clean}', value='{val}'")
                 return val
             
@@ -76,6 +77,7 @@ class PreferenceService:
                 if legacy_val is not None:
                     # Store it back to structured SQLite storage for the future
                     self.save_preference(key, legacy_val)
+                    print(f"[MEMORY RETRIEVE] key='{key_clean}', value='{legacy_val}'")
                     print(f"[Preference Retrieved] key='{key_clean}', value='{legacy_val}'")
                     return legacy_val
             except Exception:
@@ -86,6 +88,7 @@ class PreferenceService:
                 from core import memory
                 val = memory.get_preference_legacy(key)
                 if val is not None:
+                    print(f"[MEMORY RETRIEVE] key='{key_clean}', value='{val}'")
                     print(f"[Preference Retrieved] key='{key_clean}', value='{val}'")
                     return val
             except Exception:
@@ -124,8 +127,10 @@ class PreferenceService:
         if verified_val == value:
             print("[Preference Validation Passed]")
             if exists:
+                print(f"[MEMORY UPDATE] key='{key_clean}', value='{value}'")
                 print(f"[Preference Updated] key='{key_clean}', value='{value}'")
             else:
+                print(f"[MEMORY SAVE] key='{key_clean}', value='{value}'")
                 print(f"[Preference Saved] key='{key_clean}', value='{value}'")
         else:
             print("[Preference Validation Failed]")
