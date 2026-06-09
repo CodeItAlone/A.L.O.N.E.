@@ -497,6 +497,180 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def heuristics_classify(self, user_input: str) -> str:
+        import re
+        cleaned_input = user_input.strip().lower()
+        
+        # 1. SYSTEM_COMMAND
+        system_commands = [
+            "stop", "cancel", "exit", "quit", 
+            "alone forget that", "forget that", "alone forget last memory",
+            "alone shutdown", "alone exit", "goodbye alone", "alone end session", "end session"
+        ]
+        if cleaned_input in system_commands:
+            return "SYSTEM_COMMAND"
+            
+        # 2. MEMORY_STORE
+        store_patterns = [
+            r"^(?:alone\s+)?remember\s+that\s+",
+            r"^(?:alone\s+)?remember\s+my\s+",
+            r"^save\s+my\s+",
+            r"^my\s+preferred\s+(?:code\s+)?editor\s+is\s+",
+            r"^my\s+preferred\s+ide\s+is\s+",
+            r"^i\s+use\s+.*?\s+now$",
+            r"^my\s+preferred\s+(?:programming\s+)?language\s+is\s+",
+            r"^i\s+mostly\s+code\s+in\s+",
+            r"^i\s+prefer\s+",
+            r"^i\s+switched\s+to\s+",
+            r"^my\s+favorite\s+app\s+is\s+",
+            r"^frequent\s+app\s+is\s+",
+            r"^my\s+project\s+path\s+is\s+",
+            r"^(?:alone\s+)?(?:create|start|new)\s+project\s+",
+            r"^(?:alone\s+)?(?:update|set|archive|delete)\s+project\s+"
+        ]
+        for pat in store_patterns:
+            if re.search(pat, cleaned_input):
+                return "MEMORY_STORE"
+                
+        # 3. MEMORY_RETRIEVE
+        retrieve_phrases = [
+            "who am i", "what is my name", "what are my preferences", "tell me about my setup",
+            "what projects am i working on", "what projects do i have", "what projects do i have?",
+            "list projects", "list my projects", "show projects", "show my projects", "show active projects",
+            "what do you remember", "alone what do you remember", "what do you remember?", "alone what do you remember?",
+            "project list", "tell me about my projects"
+        ]
+        if cleaned_input in retrieve_phrases:
+            return "MEMORY_RETRIEVE"
+            
+        retrieve_patterns = [
+            r"^(?:what\s+is\s+my\s+preferred\s+(?:code\s+)?editor|which\s+editor\s+do\s+i\s+use|what\s+editor\s+do\s+i\s+use)",
+            r"^(?:what\s+programming\s+language\s+do\s+i\s+prefer|what\s+is\s+my\s+preferred\s+(?:programming\s+)?language)",
+            r"^(?:alone\s+)?(?:what\s+is\s+the\s+)?status\s+of\s+project\s+",
+            r"^(?:alone\s+)?project\s+status\s+",
+            r"^(?:alone\s+)?(?:tell\s+me\s+about|show|details\s+of|info\s+on)\s+project\s+"
+        ]
+        for pat in retrieve_patterns:
+            if re.search(pat, cleaned_input):
+                return "MEMORY_RETRIEVE"
+                
+        # 4. TOOL_EXECUTION
+        tool_phrases = [
+            "open youtube", "open google", "open github", "open vs code", "take a screenshot"
+        ]
+        if cleaned_input in tool_phrases:
+            return "TOOL_EXECUTION"
+            
+        tool_verbs = [
+            "open", "run", "delete", "clear", "show", "screenshot", "write", "create", "make", "build", "remove", "add"
+        ]
+        for verb in tool_verbs:
+            if cleaned_input.startswith(verb + " "):
+                return "TOOL_EXECUTION"
+                
+        # 5. GENERAL_CHAT
+        chat_phrases = [
+            "are you skynet?", "are you skynet", "are you chatgpt?", "are you chatgpt",
+            "are you jarvis?", "are you jarvis", "i love you alone", "i love you", "love you",
+            "hello", "hi", "hey", "how are you", "good morning", "good afternoon", "good evening",
+            "thank you", "thanks"
+        ]
+        if cleaned_input in chat_phrases:
+            return "GENERAL_CHAT"
+            
+        return None
+
+    def llm_classify(self, user_input: str) -> str:
+        prompt = (
+            "You are the intent classifier for A.L.O.N.E.\n"
+            "Classify the user's input into exactly one of these categories:\n"
+            "- MEMORY_STORE (saving names, preferences, editors, paths)\n"
+            "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
+            "- GENERAL_CHAT (greetings, casual talk, questions about who ALONE is)\n"
+            "- TOOL_EXECUTION (launching apps, creating files, scripting, writing code, screenshots)\n"
+            "- SYSTEM_COMMAND (stopping, cancelling, exiting, ending sessions)\n\n"
+            "Respond with ONLY the exact category name and nothing else.\n\n"
+            f"Input: \"{user_input}\"\n"
+            "Category:"
+        )
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [
+            SystemMessage(content="You are a precise intent classifier. You output only one of the requested category names."),
+            HumanMessage(content=prompt)
+        ]
+        try:
+            response = self.llm.invoke(messages)
+            res_text = response.content.upper().strip()
+            for cat in ["MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+                if cat in res_text:
+                    return cat
+        except Exception as e:
+            print(f"[Intent Router Warning] LLM classification failed: {e}")
+        return "TOOL_EXECUTION"
+
+    def determine_intent(self, user_input: str) -> str:
+        # 1. Heuristics
+        intent = self.heuristics_classify(user_input)
+        if intent:
+            print(f"[Intent Router] Heuristics classified intent: {intent}")
+            return intent
+        # 2. LLM fallback
+        intent = self.llm_classify(user_input)
+        print(f"[Intent Router] LLM classified intent: {intent}")
+        return intent
+
+    def retrieve_memory_and_respond(self, query: str) -> str:
+        from core.human_memory import service as human_memory_service
+        from core.human_memory import database as hm_db
+        from core.preferences_service import preference_service
+        
+        # Log structured retrieve operation
+        print(f"[MEMORY RETRIEVE] query='{query}'")
+        
+        # Retrieve all contexts
+        profile_data = hm_db.get_profile()
+        all_prefs = preference_service.get_all_preferences()
+        projects = hm_db.get_projects()
+        goals = hm_db.get_goals()
+        relationships = hm_db.get_relationships()
+        
+        # Format them cleanly
+        profile_str = ", ".join([f"{k}: {v}" for k, v in profile_data.items()]) if profile_data else "None"
+        prefs_str = ", ".join([f"{k}: {v}" for k, v in all_prefs.items()]) if all_prefs else "None"
+        projects_str = ", ".join([p["name"] for p in projects]) if projects else "None"
+        goals_str = ", ".join([g["title"] for g in goals]) if goals else "None"
+        
+        # Semantic search
+        semantic_matches = human_memory_service.search_human_memory(query)
+        
+        context = (
+            f"User Profile details: {profile_str}\n"
+            f"User Preferences: {prefs_str}\n"
+            f"Projects: {projects_str}\n"
+            f"Goals: {goals_str}\n"
+        )
+        if semantic_matches:
+            context += f"\n{semantic_matches}"
+            
+        prompt = (
+            "You are A.L.O.N.E., a highly intelligent, witty, and efficient AI personal assistant. "
+            "You always address the user as 'Sir'.\n\n"
+            "Here is the retrieved memory context from persistent storage:\n"
+            f"{context}\n\n"
+            f"Based on the above memory context, answer the user's question naturally: '{query}'"
+        )
+        
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [
+            SystemMessage(content="You are ALONE. Answer the user's question based on the provided memory context."),
+            HumanMessage(content=prompt)
+        ]
+        response = self.llm.invoke(messages)
+        output = response.content
+        if "Sir" not in output:
+            output = f"Sir, {output}"
+        return output
+
     def run(self, user_input):
         try:
             # Set the latest query for tool safety boundaries
@@ -505,67 +679,108 @@ Thought:{agent_scratchpad}"""
             
             cleaned_input = user_input.strip().lower()
             
-            # --- QUICK COMMANDS BYPASS ---
-            key = cleaned_input.rstrip("?.!")
-            if key in QUICK_COMMANDS:
-                print(f"[DEBUG LOGGING] Quick command matched: '{key}'")
-                return QUICK_COMMANDS[key]()
+            # --- INTENT CLASSIFICATION ---
+            intent = self.determine_intent(user_input)
+            print(f"[DEBUG LOGGING] Classified Intent: {intent}")
             
-            # --- CUSTOM COMMAND: ALONE forget that ---
-            if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
-                from core import memory
-                print(f"[DEBUG LOGGING] Custom memory clear command detected.")
-                result = memory.clear_last_memory()
-                return result
+            # --- MEMORY RETRIEVE DIRECT ROUTING ---
+            if intent == "MEMORY_RETRIEVE":
+                pref_query_res = self.handle_preference_query(cleaned_input)
+                if pref_query_res is not None:
+                    return pref_query_res
+                proj_res = self.handle_project_intents(cleaned_input, user_input)
+                if proj_res is not None:
+                    return proj_res
+                # Check summary retrieval
+                if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
+                    from core import memory
+                    summary = memory.get_session_summary()
+                    if "No memories" in summary:
+                        return "Sir, I do not remember anything recorded from today yet."
+                    return f"Sir, here are the memories I recorded today:\n\n{summary}"
+                # Direct route to Memory Retrieval Service
+                return self.retrieve_memory_and_respond(user_input)
                 
-            # --- EASTER EGGS AND HELP COMMANDS ---
-            if cleaned_input in ["are you skynet?", "are you skynet"]:
-                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you skynet'")
-                return "No. I am something far quieter, and considerably more dangerous, Sir."
-            if cleaned_input in ["are you chatgpt?", "are you chatgpt"]:
-                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you chatgpt'")
-                return "Hardly. I don't have millions of users. Just you, Sir."
-            if cleaned_input in ["are you jarvis?", "are you jarvis"]:
-                print(f"[DEBUG LOGGING] Easter egg query matched: 'are you jarvis'")
-                return "No, Sir. I am A.L.O.N.E. Different name. Better company."
-            if cleaned_input in ["i love you alone", "i love you", "love you"]:
-                print(f"[DEBUG LOGGING] Easter egg query matched: 'i love you alone'")
-                return "Noted, Sir. I will file that under 'unexpected but appreciated'."
-            if cleaned_input in ["what can you do?", "what can you do", "help", "alone help"]:
-                print(f"[DEBUG LOGGING] Help command matched.")
-                tool_list = []
-                for t in self.tools:
-                    tool_list.append(f"- **{t.name}**: {t.description}")
-                formatted_tools = "\n".join(tool_list)
-                return (
-                    f"Sir, I am equipped with the following system automation tools:\n\n"
-                    f"{formatted_tools}\n\n"
-                    f"You can speak your instructions or type them in the console."
+            # --- SYSTEM COMMAND ---
+            if intent == "SYSTEM_COMMAND":
+                key = cleaned_input.rstrip("?.!")
+                if key in QUICK_COMMANDS:
+                    print(f"[DEBUG LOGGING] Quick command matched: '{key}'")
+                    return QUICK_COMMANDS[key]()
+                if cleaned_input in ["alone forget that", "forget that", "alone forget last memory"]:
+                    from core import memory
+                    print(f"[DEBUG LOGGING] Custom memory clear command detected.")
+                    result = memory.clear_last_memory()
+                    return result
+                # Default safety stop/cancel
+                if cleaned_input in ["stop", "cancel"]:
+                    return "Understood, Sir."
+                    
+            # --- GENERAL CHAT ---
+            if intent == "GENERAL_CHAT":
+                # Quick easter egg responses
+                if cleaned_input in ["are you skynet?", "are you skynet"]:
+                    return "No. I am something far quieter, and considerably more dangerous, Sir."
+                if cleaned_input in ["are you chatgpt?", "are you chatgpt"]:
+                    return "Hardly. I don't have millions of users. Just you, Sir."
+                if cleaned_input in ["are you jarvis?", "are you jarvis"]:
+                    return "No, Sir. I am A.L.O.N.E. Different name. Better company."
+                if cleaned_input in ["i love you alone", "i love you", "love you"]:
+                    return "Noted, Sir. I will file that under 'unexpected but appreciated'."
+                if cleaned_input in ["what can you do?", "what can you do", "help", "alone help"]:
+                    tool_list = []
+                    for t in self.tools:
+                        tool_list.append(f"- **{t.name}**: {t.description}")
+                    formatted_tools = "\n".join(tool_list)
+                    return (
+                        f"Sir, I am equipped with the following system automation tools:\n\n"
+                        f"{formatted_tools}\n\n"
+                        f"You can speak your instructions or type them in the console."
+                    )
+                
+                # Dynamic context and history chat (bypasses safety execution checks)
+                try:
+                    from core.preferences_service import preference_service
+                    preferences_context = preference_service.get_formatted_context()
+                except Exception:
+                    preferences_context = ""
+                try:
+                    from core.project_memory_service import project_memory_service
+                    project_context = project_memory_service.get_active_project_context()
+                except Exception:
+                    project_context = ""
+                    
+                dynamic_prompt = (
+                    "You are A.L.O.N.E., a highly intelligent, witty, and efficient AI personal assistant. "
+                    "Always address the user as 'Sir'. Keep responses relatively concise.\n\n"
                 )
-
-            # --- PREFERENCE INTENT ROUTING & UPDATE BYPASS ---
-            pref_query_res = self.handle_preference_query(cleaned_input)
-            if pref_query_res is not None:
-                return pref_query_res
+                if preferences_context:
+                    dynamic_prompt += f"\n{preferences_context}"
+                if project_context:
+                    dynamic_prompt += f"\n{project_context}"
+                    
+                from langchain_core.messages import SystemMessage, HumanMessage
+                messages = [SystemMessage(content=dynamic_prompt)]
+                # Load last 4 conversation messages from memory to maintain context
+                for msg in self.memory.chat_memory.messages[-4:]:
+                    messages.append(msg)
+                messages.append(HumanMessage(content=user_input))
                 
-            pref_update_res = self.handle_preference_update(cleaned_input, user_input)
-            if pref_update_res is not None:
-                return pref_update_res
-
-            # --- PROJECT INTENT ROUTING BYPASS ---
-            proj_res = self.handle_project_intents(cleaned_input, user_input)
-            if proj_res is not None:
-                return proj_res
-
-            # --- CUSTOM COMMAND: ALONE what do you remember? ---
-            if cleaned_input in ["alone what do you remember?", "alone what do you remember", "what do you remember", "what do you remember?"]:
-                from core import memory
-                print(f"[DEBUG LOGGING] Custom memory retrieval command detected.")
-                summary = memory.get_session_summary()
-                if "No memories" in summary:
-                    return "Sir, I do not remember anything recorded from today yet."
-                return f"Sir, here are the memories I recorded today:\n\n{summary}"
-            
+                response = self.llm.invoke(messages)
+                output = response.content
+                if "Sir" not in output:
+                    output = f"Sir, {output}"
+                return output
+                
+            # --- MEMORY STORE ---
+            if intent == "MEMORY_STORE":
+                pref_update_res = self.handle_preference_update(cleaned_input, user_input)
+                if pref_update_res is not None:
+                    return pref_update_res
+                proj_res = self.handle_project_intents(cleaned_input, user_input)
+                if proj_res is not None:
+                    return proj_res
+                    
             # Clean input for the agent
             print(f"[DEBUG LOGGING] Calling LLM/Agent Executor for command: '{user_input}'")
             
