@@ -49,7 +49,8 @@ def normalize_text(text):
 def match_wake_word_fuzzy(normalized_text, threshold=0.75):
     """
     Checks if normalized_text starts with or contains a fuzzy match of target phrases.
-    Targets: "hey alone" (2 words), "alone" (1 word).
+    Targets: "hey alone", "ok alone".
+    Do NOT trigger on standalone "alone".
     Returns (detected, matched_phrase, confidence, clean_command).
     """
     words = normalized_text.split()
@@ -60,48 +61,35 @@ def match_wake_word_fuzzy(normalized_text, threshold=0.75):
     best_match_phrase = ""
     best_match_len = 0
     
-    # Check "hey alone" target (2 words)
+    # Check "hey alone" and "ok alone" targets (2 words)
+    targets = ["hey alone", "ok alone"]
     if len(words) >= 2:
         for i in range(len(words) - 1):
             phrase = words[i] + " " + words[i+1]
-            dist = levenshtein_distance(phrase, "hey alone")
-            sim = 1.0 - (dist / max(len(phrase), 9))
-            if sim > best_sim:
-                best_sim = sim
-                best_match_phrase = phrase
-                best_match_len = 2
-                
-    # Check "alone" target (1 word)
-    for i in range(len(words)):
-        word = words[i]
-        dist = levenshtein_distance(word, "alone")
-        sim = 1.0 - (dist / max(len(word), 5))
-        if sim > best_sim:
-            best_sim = sim
-            best_match_phrase = word
-            best_match_len = 1
-            
-    # Also support other manual phonetic triggers for high confidence
-    phonetic_triggers = ["alon", "alloon", "aloon", "allone", "loon", "loone", "elone", "hey salon", "hey along", "hey low", "he alone", "he alon"]
-    for i, word in enumerate(words):
-        if word in phonetic_triggers:
-            sim = 0.95
-            if sim > best_sim:
-                best_sim = sim
-                best_match_phrase = word
-                best_match_len = 1
-
-    # Check for two word phonetic triggers
+            for target in targets:
+                dist = levenshtein_distance(phrase, target)
+                sim = 1.0 - (dist / max(len(phrase), len(target)))
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match_phrase = phrase
+                    best_match_len = 2
+                    
+    # Also support other manual phonetic triggers for high confidence (always 2 words)
+    two_word_phonetic_triggers = [
+        "hey aloon", "hey alon", "hey allon", "hey alloon", "hey allone", "hey loone", 
+        "hay alone", "hay alon", "hay alloon", "hey salon", "hey along", "hey low", 
+        "he alone", "he alon", "ok aloon", "ok alon", "ok allon", "ok alloon", 
+        "ok allone", "ok loone", "okay alone", "okay alon", "okay alloon", "okay aloon"
+    ]
     if len(words) >= 2:
         for i in range(len(words) - 1):
             phrase = words[i] + " " + words[i+1]
-            for trigger in ["hey aloon", "hey alon", "hey allon", "hey alloon", "hey allone", "hey loone", "hay alone", "hay alon", "hay alloon"]:
-                if phrase == trigger:
-                    sim = 0.98
-                    if sim > best_sim:
-                        best_sim = sim
-                        best_match_phrase = phrase
-                        best_match_len = 2
+            if phrase in two_word_phonetic_triggers:
+                sim = 0.98
+                if sim > best_sim:
+                    best_sim = sim
+                    best_match_phrase = phrase
+                    best_match_len = 2
 
     if best_sim >= threshold:
         clean_command = normalized_text
@@ -384,37 +372,66 @@ def _listen_loop(callback):
                 try:
                     audio_chunk, overflow = _stream.read(chunk_len)
                     audio_data = audio_chunk.flatten()
-                    
                     if oww_model:
+                        is_within_active_window = (time.time() - _last_interaction_time <= _active_window_duration)
+                        rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
+                        
                         prediction = oww_model.predict(audio_data)
-                        if prediction:
-                            prob = max(prediction.values()) if prediction.values() else 0.0
+                        prob = max(prediction.values()) if prediction and prediction.values() else 0.0
+                        
+                        # Print score if > 0.2
+                        if prob > 0.2:
+                            print(f"[ALONE] Wake word score: {prob:.4f}")
                             
-                            # Print score if > 0.2
-                            if prob > 0.2:
-                                print(f"[ALONE] Wake word score: {prob:.4f}")
+                        if prob >= threshold:
+                            print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")
+                            _play_beep()
+                            
+                            try:
+                                from ui.window import signals
+                                signals.status_changed.emit("LISTENING")
+                            except Exception:
+                                pass
                                 
-                            if prob >= threshold:
-                                print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")
-                                _play_beep()
+                            # Close the wake word input stream temporarily to allow command recording
+                            _stream.stop()
+                            _stream.close()
+                            _stream = None
+                            
+                            audio_path = record_until_silence()
+                            if audio_path:
+                                callback(audio_path, wake_word_detected=True)
                                 
-                                try:
-                                    from ui.window import signals
-                                    signals.status_changed.emit("LISTENING")
-                                except Exception:
-                                    pass
-                                    
-                                # Close the wake word input stream temporarily to allow command recording
-                                _stream.stop()
-                                _stream.close()
-                                _stream = None
-                                
-                                audio_path = record_until_silence()
-                                if audio_path:
-                                    callback(audio_path)
-                                    
-                                oww_model.reset()
-                                print(f"[*] ALONE: Awaiting wake word...")
+                            oww_model.reset()
+                            print(f"[*] ALONE: Awaiting wake word...")
+                        elif is_within_active_window and rms >= energy_threshold:
+                            print(f"\n[Active Window] Speech detected (RMS: {rms:.1f}). Capturing direct command...")
+                            _stream.stop()
+                            _stream.close()
+                            _stream = None
+                            
+                            audio_path = record_until_silence()
+                            if audio_path:
+                                from core.transcriber import transcribe
+                                print("[Active Window] Transcribing captured slice...")
+                                text = transcribe(audio_path)
+                                normalized_text = normalize_text(text)
+                                if normalized_text.strip() != "":
+                                    _play_beep()
+                                    try:
+                                        from ui.window import signals
+                                        signals.status_changed.emit("LISTENING")
+                                    except Exception:
+                                        pass
+                                    callback(audio_path, active_window_bypass=True)
+                                else:
+                                    print("[Active Window] Empty speech detected.")
+                                    if os.path.exists(audio_path):
+                                        try:
+                                            os.remove(audio_path)
+                                        except Exception:
+                                            pass
+                            oww_model.reset()
                     else:
                         # VAD Speech-To-Text fallback for custom wake word "hey alone"
                         rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
@@ -468,7 +485,7 @@ def _listen_loop(callback):
                                                 
                                         cmd_audio_path = record_until_silence()
                                         if cmd_audio_path:
-                                            callback(cmd_audio_path)
+                                            callback(cmd_audio_path, wake_word_detected=True)
                                         else:
                                             print("[VAD Fallback] No command detected.")
                                             try:
@@ -491,7 +508,7 @@ def _listen_loop(callback):
                                                 signals.status_changed.emit("LISTENING")
                                             except Exception:
                                                 pass
-                                            callback(audio_path)
+                                            callback(audio_path, active_window_bypass=True)
                                         else:
                                             print("[VAD Fallback] Empty speech detected in active window.")
                                             try:
