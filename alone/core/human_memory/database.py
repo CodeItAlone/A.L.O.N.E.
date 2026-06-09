@@ -105,20 +105,39 @@ def get_profile():
         cursor.execute("SELECT key, value FROM user_profile")
         rows = cursor.fetchall()
         conn.close()
-        return {row["key"]: row["value"] for row in rows}
+        res = {row["key"]: row["value"] for row in rows}
+        for k, v in res.items():
+            print(f"[MEMORY RETRIEVE] key='{k}', value='{v}'")
+        return res
 
 def set_profile_field(key, value):
+    key_clean = key.lower().strip()
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
+        cursor.execute("SELECT value FROM user_profile WHERE key = ?", (key_clean,))
+        row = cursor.fetchone()
+        exists = row is not None
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
         INSERT INTO user_profile (key, value, updated_at)
         VALUES (?, ?, ?)
         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-        """, (key.lower().strip(), value, now))
+        """, (key_clean, value, now))
         conn.commit()
         conn.close()
+        
+        if exists:
+            print(f"[MEMORY UPDATE] key='{key_clean}', value='{value}'")
+        else:
+            print(f"[MEMORY SAVE] key='{key_clean}', value='{value}'")
+            
+    # Verify profile memory is actually persisted before responding
+    verified_prof = get_profile()
+    if verified_prof.get(key_clean) == value:
+        print("[Profile Memory Validation Passed]")
+    else:
+        print("[Profile Memory Validation Failed]")
 
 def delete_profile_field(key):
     with db_lock:
@@ -186,6 +205,7 @@ def add_project(project_id, name, description, status="active", phase="", priori
         """, (project_id, name, description, status, phase, priority, now, now))
         conn.commit()
         conn.close()
+        print(f"[MEMORY SAVE] project='{name}', id='{project_id}'")
 
 def update_project(project_id, name, description, status, phase=None, priority=None):
     with db_lock:
@@ -209,6 +229,7 @@ def update_project(project_id, name, description, status, phase=None, priority=N
         cursor.execute(query, tuple(params))
         conn.commit()
         conn.close()
+        print(f"[MEMORY UPDATE] project='{name}', id='{project_id}'")
 
 def delete_project(project_id):
     with db_lock:
@@ -242,6 +263,7 @@ def add_goal(goal_id, title, description, status="pending", parent_goal_id=None,
         """, (goal_id, title, description, status, parent_goal_id, target_date, now, now))
         conn.commit()
         conn.close()
+        print(f"[MEMORY SAVE] goal='{title}', id='{goal_id}'")
 
 def update_goal(goal_id, title, description, status, parent_goal_id=None, target_date=None):
     with db_lock:
@@ -253,6 +275,7 @@ def update_goal(goal_id, title, description, status, parent_goal_id=None, target
         """, (title, description, status, parent_goal_id, target_date, now, goal_id))
         conn.commit()
         conn.close()
+        print(f"[MEMORY UPDATE] goal='{title}', id='{goal_id}'")
 
 def delete_goal(goal_id):
     with db_lock:
@@ -283,6 +306,7 @@ def add_relationship(rel_id, name, relation_type, contact_info, notes):
         """, (rel_id, name, relation_type, contact_info, notes, now, now))
         conn.commit()
         conn.close()
+        print(f"[MEMORY SAVE] contact='{name}', id='{rel_id}'")
 
 def update_relationship(rel_id, name, relation_type, contact_info, notes):
     with db_lock:
@@ -294,6 +318,7 @@ def update_relationship(rel_id, name, relation_type, contact_info, notes):
         """, (name, relation_type, contact_info, notes, now, rel_id))
         conn.commit()
         conn.close()
+        print(f"[MEMORY UPDATE] contact='{name}', id='{rel_id}'")
 
 def delete_relationship(rel_id):
     with db_lock:
