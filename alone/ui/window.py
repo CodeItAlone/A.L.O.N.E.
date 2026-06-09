@@ -98,9 +98,9 @@ def setup_runtime_hooks():
         main_module = sys.modules.get('__main__')
         if main_module and hasattr(main_module, 'handle_audio'):
             orig_handle_audio = main_module.handle_audio
-            def patched_handle_audio(audio_path):
+            def patched_handle_audio(audio_path, *args, **kwargs):
                 try:
-                    orig_handle_audio(audio_path)
+                    orig_handle_audio(audio_path, *args, **kwargs)
                 except Exception as e:
                     try:
                         signals.log_message.emit(f"Audio pipeline failed: {str(e)}", "error")
