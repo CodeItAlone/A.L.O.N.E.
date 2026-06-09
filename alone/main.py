@@ -35,7 +35,7 @@ _agent_active = threading.Event()
 _last_command = ""
 _last_response = ""
 
-def handle_audio(audio_path):
+def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=False):
     """
     Called by listener — runs in background thread.
     Updates GUI thread-safely via custom signals.
@@ -68,10 +68,17 @@ def handle_audio(audio_path):
         
         # Check active window bypass
         import time
-        is_active_window = (time.time() - get_last_interaction_time() <= _active_window_duration)
-        detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
+        is_active_window = active_window_bypass or (time.time() - get_last_interaction_time() <= _active_window_duration)
         
-        print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
+        if wake_word_detected:
+            detected = True
+            matched_phrase = "PRE-DETECTED"
+            confidence = 1.0
+            clean_command = normalized_text
+            print("[DEBUG LOGGING] Wake-word pre-detected by listener. Bypassing wake-word extraction.")
+        else:
+            detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
+            print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
         
         global _last_command, _last_response
         if is_active_window:
