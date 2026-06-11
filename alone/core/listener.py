@@ -46,7 +46,7 @@ def normalize_text(text):
     # Normalize whitespaces
     return " ".join(text.split())
 
-def match_wake_word_fuzzy(normalized_text, threshold=0.75):
+def match_wake_word_fuzzy(normalized_text, threshold=0.85):
     """
     Checks if normalized_text starts with or contains a fuzzy match of target phrases.
     Targets: "hey alone", "ok alone".
@@ -495,7 +495,7 @@ def _listen_loop(callback):
                                                 pass
                                     else:
                                         print("[VAD Fallback] One-shot command detected.")
-                                        callback(audio_path)
+                                        callback(audio_path, wake_word_detected=True)
                                 else:
                                     # Wake word was NOT detected in the transcription
                                     if is_within_active_window:
