@@ -41,6 +41,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
     Updates GUI thread-safely via custom signals.
     """
     try:
+        print(f"[PIPELINE DIAGNOSTIC] Raw audio file received: {audio_path}")
         try:
             from ui.window import signals
             signals.status_changed.emit("THINKING")
@@ -48,6 +49,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
             pass
 
         text = transcribe(audio_path)
+        print(f"[PIPELINE DIAGNOSTIC] Whisper transcription: \"{text}\"")
         if not text or text.strip() == "":
             speak_async("I didn't catch that, Sir.")
             try:
@@ -69,6 +71,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
         # Check active window bypass
         import time
         is_active_window = active_window_bypass or (time.time() - get_last_interaction_time() <= _active_window_duration)
+        print(f"[PIPELINE DIAGNOSTIC] Listening window check: is_active_window={is_active_window}")
         
         if wake_word_detected:
             detected = True
@@ -79,6 +82,8 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
         else:
             detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
             print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
+        
+        print(f"[PIPELINE DIAGNOSTIC] Fuzzy wake-word check: detected={detected}, matched={matched_phrase}, sim={confidence:.2f}")
         
         global _last_command, _last_response
         if is_active_window:
@@ -111,6 +116,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
                 clean_text = ""
                 
         print(f"[DEBUG LOGGING] Command extraction result: '{clean_text}'")
+        print(f"[PIPELINE DIAGNOSTIC] Command extraction result: \"{clean_text}\"")
         # ----------------------------------------------------
                 
         if not clean_text:
