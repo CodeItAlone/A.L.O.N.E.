@@ -206,3 +206,100 @@ def search_human_memory(query: str, top_k: int = 2) -> str:
         return ""
         
     return "=== SEMANTIC MEMORY MATCHES ===\n" + "\n\n".join(results_text) + "\n==============================="
+
+
+class UserProfileService:
+    @staticmethod
+    def extract(llm, text: str) -> dict:
+        """Extracts user profile details from natural language text as a JSON dictionary."""
+        prompt = (
+            "You are a precise metadata extractor for a personal assistant.\n"
+            "Analyze the following statement and extract personal attributes about the user (e.g. name, education, profession, role, hobbies, age, etc.).\n"
+            "Do not extract system configuration details or preferences (like preferred code editors, paths, IDEs, or languages).\n"
+            "Return ONLY a valid JSON object map of key-value pairs representing these profile attributes (keys and values must be strings).\n"
+            "If no attributes are found, return an empty JSON object {}.\n\n"
+            f"User Statement: \"{text}\"\n"
+            "JSON Output:"
+        )
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [
+            SystemMessage(content="You are a precise metadata extractor. You respond with ONLY a valid JSON object."),
+            HumanMessage(content=prompt)
+        ]
+        try:
+            response = llm.invoke(messages)
+            content = response.content.strip()
+            # Clean possible markdown wrap (```json ... ```)
+            if content.startswith("```"):
+                lines = content.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                content = "\n".join(lines).strip()
+            
+            import json
+            data = json.loads(content)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            print(f"[Memory Warning] User profile extraction failed: {e}")
+        return {}
+
+    @staticmethod
+    def save(extracted: dict) -> bool:
+        """Saves user profile attributes to the database, syncing with vector store, logging results and performing post-write verification."""
+        if not extracted:
+            return False
+            
+        # Log detected profile
+        print("[PROFILE DETECTED]")
+        for k, v in extracted.items():
+            print(f"{k}={v}")
+            
+        # Determine if it's an update of any existing fields
+        existing = database.get_profile()
+        is_update = any(k.lower().strip() in existing for k in extracted)
+        
+        # Save attributes
+        for k, v in extracted.items():
+            database.set_profile_field(k, v)
+            
+        # Sync with ChromaDB vector store
+        sync_profile_to_vector()
+        
+        # Log save / update status
+        if is_update:
+            print("[PROFILE UPDATE]")
+        else:
+            print("[PROFILE SAVE]")
+        print("success=True")
+        
+        # Post-write verification
+        verified = database.get_profile()
+        verify_passed = True
+        print("[PROFILE VERIFY]")
+        for k, v in extracted.items():
+            key_clean = k.lower().strip()
+            db_val = verified.get(key_clean)
+            print(f"{k}={v}")
+            if db_val != v:
+                verify_passed = False
+                
+        if verify_passed:
+            print("status=PASS")
+        else:
+            print("status=FAIL")
+            
+        return verify_passed
+
+    @staticmethod
+    def retrieve() -> dict:
+        """Retrieves user profile attributes from the database and logs retrieval."""
+        profile = database.get_profile()
+        print("[PROFILE RETRIEVE]")
+        for k, v in profile.items():
+            print(f"{k}={v}")
+        return profile
+
+

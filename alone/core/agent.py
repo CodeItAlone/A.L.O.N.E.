@@ -510,6 +510,23 @@ Thought:{agent_scratchpad}"""
         if cleaned_input in system_commands:
             return "SYSTEM_COMMAND"
             
+        # USER_PROFILE_UPDATE
+        profile_patterns = [
+            r"^my\s+name\s+is\s+",
+            r"^i\s+am\s+(?:a\s+|an\s+)?student",
+            r"^i\s+am\s+(?:a\s+|an\s+)?engineering\s+student",
+            r"^i\s+am\s+",
+            r"^i'm\s+",
+            r"^i\s+study\s+",
+            r"^i\s+work\s+as\s+",
+            r"^i\s+am\s+learning\s+",
+            r"^my\s+role\s+is\s+",
+            r"^my\s+profession\s+is\s+"
+        ]
+        for pat in profile_patterns:
+            if re.search(pat, cleaned_input):
+                return "USER_PROFILE_UPDATE"
+                
         # 2. MEMORY_STORE
         store_patterns = [
             r"^(?:alone\s+)?remember\s+that\s+",
@@ -534,7 +551,7 @@ Thought:{agent_scratchpad}"""
                 
         # 3. MEMORY_RETRIEVE
         retrieve_phrases = [
-            "who am i", "what is my name", "what are my preferences", "tell me about my setup",
+            "who am i", "who am i?", "what is my name", "what is my name?", "what are my preferences", "tell me about my setup",
             "what projects am i working on", "what projects do i have", "what projects do i have?",
             "list projects", "list my projects", "show projects", "show my projects", "show active projects",
             "what do you remember", "alone what do you remember", "what do you remember?", "alone what do you remember?",
@@ -584,7 +601,8 @@ Thought:{agent_scratchpad}"""
         prompt = (
             "You are the intent classifier for A.L.O.N.E.\n"
             "Classify the user's input into exactly one of these categories:\n"
-            "- MEMORY_STORE (saving names, preferences, editors, paths)\n"
+            "- USER_PROFILE_UPDATE (stating user's name, education, job, role, age, what they study, profession, or general personal profile update)\n"
+            "- MEMORY_STORE (saving system preferences, code editors, file/project paths)\n"
             "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
             "- GENERAL_CHAT (greetings, casual talk, questions about who ALONE is)\n"
             "- TOOL_EXECUTION (launching apps, creating files, scripting, writing code, screenshots)\n"
@@ -601,7 +619,7 @@ Thought:{agent_scratchpad}"""
         try:
             response = self.llm.invoke(messages)
             res_text = response.content.upper().strip()
-            for cat in ["MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+            for cat in ["USER_PROFILE_UPDATE", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
                 if cat in res_text:
                     return cat
         except Exception as e:
@@ -628,7 +646,8 @@ Thought:{agent_scratchpad}"""
         print(f"[MEMORY RETRIEVE] query='{query}'")
         
         # Retrieve all contexts
-        profile_data = hm_db.get_profile()
+        from core.human_memory.service import UserProfileService
+        profile_data = UserProfileService.retrieve()
         all_prefs = preference_service.get_all_preferences()
         projects = hm_db.get_projects()
         goals = hm_db.get_goals()
@@ -683,6 +702,36 @@ Thought:{agent_scratchpad}"""
             intent = self.determine_intent(user_input)
             print(f"[DEBUG LOGGING] Classified Intent: {intent}")
             
+            # --- USER_PROFILE_UPDATE DIRECT ROUTING ---
+            if intent == "USER_PROFILE_UPDATE":
+                from core.human_memory.service import UserProfileService
+                extracted = UserProfileService.extract(self.llm, user_input)
+                UserProfileService.save(extracted)
+                
+                # Fetch profile back for response generation
+                retrieved_profile = UserProfileService.retrieve()
+                
+                # Ask LLM to format confirmation response
+                profile_str = ", ".join([f"{k}: {v}" for k, v in retrieved_profile.items()]) if retrieved_profile else "None"
+                
+                prompt = (
+                    "You are A.L.O.N.E., a highly intelligent, witty, and efficient AI personal assistant. "
+                    "You always address the user as 'Sir'. Keep responses relatively concise.\n\n"
+                    "The user has updated their personal profile. Here is their current verified profile from persistent storage:\n"
+                    f"{profile_str}\n\n"
+                    f"Write a natural confirmation response acknowledging the user's profile update statement: '{user_input}'"
+                )
+                from langchain_core.messages import SystemMessage, HumanMessage
+                messages = [
+                    SystemMessage(content="You are ALONE. Answer the user's question based on the provided memory context."),
+                    HumanMessage(content=prompt)
+                ]
+                response = self.llm.invoke(messages)
+                output = response.content
+                if "Sir" not in output:
+                    output = f"Sir, {output}"
+                return output
+
             # --- MEMORY RETRIEVE DIRECT ROUTING ---
             if intent == "MEMORY_RETRIEVE":
                 pref_query_res = self.handle_preference_query(cleaned_input)
