@@ -515,8 +515,7 @@ Thought:{agent_scratchpad}"""
             r"^my\s+name\s+is\s+",
             r"^i\s+am\s+(?:a\s+|an\s+)?student",
             r"^i\s+am\s+(?:a\s+|an\s+)?engineering\s+student",
-            r"^i\s+am\s+",
-            r"^i'm\s+",
+            r"^i\s+am\s+(?:a\s+|an\s+)?(?:developer|engineer|programmer|designer|student|teacher|architect|user)",
             r"^i\s+study\s+",
             r"^i\s+work\s+as\s+",
             r"^i\s+am\s+learning\s+",
@@ -701,6 +700,7 @@ Thought:{agent_scratchpad}"""
             # --- INTENT CLASSIFICATION ---
             intent = self.determine_intent(user_input)
             print(f"[DEBUG LOGGING] Classified Intent: {intent}")
+            print(f"[PIPELINE DIAGNOSTIC] Intent Router determination: intent={intent}")
             
             # --- USER_PROFILE_UPDATE DIRECT ROUTING ---
             if intent == "USER_PROFILE_UPDATE":
