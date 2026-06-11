@@ -56,7 +56,8 @@ class Transcriber:
                 audio_path, 
                 beam_size=5, 
                 vad_filter=self.vad_filter,
-                language="en"
+                language="en",
+                initial_prompt="Hey Alone, ok alone."
             )
             
             text_segments = []
@@ -124,7 +125,8 @@ def transcribe(audio_path):
     segments, _ = model.transcribe(
         audio_path,
         language="en",
-        vad_filter=True
+        vad_filter=True,
+        initial_prompt="Hey Alone, ok alone."
     )
     return " ".join([s.text for s in segments]).strip()
 
