@@ -17,7 +17,8 @@ def search_human_memory(query: str) -> str:
         return f"Failed to search human memory: {e}, Sir."
 
 @tool
-def manage_goals(action: str, title: str = "", desc: str = "", status: str = "", target_date: str = "", goal_id: str = "") -> str:
+def manage_goals(action: str, title: str = "", desc: str = "", status: str = "", target_date: str = "", goal_id: str = "", 
+                 category: str = "", priority: str = "", progress: str = "", project_ids: str = "") -> str:
     """
     Manages user goals and milestones.
     Parameters:
@@ -27,51 +28,83 @@ def manage_goals(action: str, title: str = "", desc: str = "", status: str = "",
       - status: One of ['pending', 'in_progress', 'achieved', 'failed']
       - target_date: Completion deadline (e.g. YYYY-MM-DD)
       - goal_id: Goal ID (required for 'update' or 'delete')
+      - category: The category of the goal (e.g. work, personal, health)
+      - priority: One of ['low', 'medium', 'high']
+      - progress: Progress percentage (integer 0-100)
+      - project_ids: Comma-separated list of project IDs or names to link
     """
     action = action.lower().strip()
     try:
+        from core.human_memory.goal_controller import goal_controller
+        
         if action == "list":
-            goals = database.get_goals()
-            if not goals:
+            res = goal_controller.get_goals()
+            if not res["success"] or not res["goals"]:
                 return "No goals found, Sir."
             lines = []
-            for g in goals:
-                target = f" | Target: {g['target_date']}" if g['target_date'] else ""
-                lines.append(f"- ID: {g['id']} | Title: {g['title']} | Status: {g['status']}{target}\n  Desc: {g['description'] or 'None'}")
+            for g in res["goals"]:
+                target = f" | Target: {g['targetDate']}" if g['targetDate'] else ""
+                cat = f" | Category: {g['category']}" if g['category'] else ""
+                prio = f" | Priority: {g['priority']}" if g['priority'] else ""
+                prog = f" | Progress: {g['progress']}%"
+                proj = f" | Projects: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
+                lines.append(f"- ID: {g['id']} | Title: {g['title']} | Status: {g['status']}{prog}{cat}{prio}{target}{proj}\n  Desc: {g['description'] or 'None'}")
             return "Current Goals:\n" + "\n".join(lines)
             
         elif action == "add":
             if not title:
                 return "Error: Goal title is required for action 'add', Sir."
-            gid = str(uuid.uuid4())[:8]
-            g_status = status or "pending"
-            database.add_goal(gid, title, desc, g_status, target_date=target_date)
-            service.sync_goal_to_vector(gid, title, desc, g_status, target_date=target_date)
-            return f"Successfully added goal '{title}' with ID: {gid}, Sir."
+            
+            p_ids = [pid.strip() for pid in project_ids.split(",") if pid.strip()] if project_ids else []
+            prog_val = int(progress) if progress and progress.isdigit() else 0
+            
+            res = goal_controller.create_goal(
+                title=title,
+                description=desc,
+                category=category,
+                priority=priority,
+                status=status,
+                progress=prog_val,
+                target_date=target_date,
+                project_ids=p_ids
+            )
+            if not res["success"]:
+                return f"Failed to add goal: {res.get('error')}, Sir."
+            return f"Successfully added goal '{title}' with ID: {res['goal']['id']}, Sir."
             
         elif action == "update":
             if not goal_id:
                 return "Error: goal_id is required for action 'update', Sir."
-            # Retrieve existing
-            goals = database.get_goals()
-            existing = [g for g in goals if g["id"] == goal_id]
-            if not existing:
-                return f"Error: Goal with ID {goal_id} not found, Sir."
-            g = existing[0]
-            new_title = title or g["title"]
-            new_desc = desc or g["description"]
-            new_status = status or g["status"]
-            new_target = target_date or g["target_date"]
             
-            database.update_goal(goal_id, new_title, new_desc, new_status, target_date=new_target)
-            service.sync_goal_to_vector(goal_id, new_title, new_desc, new_status, target_date=new_target)
-            return f"Successfully updated goal '{new_title}' (ID: {goal_id}), Sir."
+            kwargs = {}
+            if title:
+                kwargs["title"] = title
+            if desc:
+                kwargs["description"] = desc
+            if status:
+                kwargs["status"] = status
+            if category:
+                kwargs["category"] = category
+            if priority:
+                kwargs["priority"] = priority
+            if progress and progress.isdigit():
+                kwargs["progress"] = int(progress)
+            if target_date:
+                kwargs["target_date"] = target_date
+            if project_ids:
+                kwargs["project_ids"] = [pid.strip() for pid in project_ids.split(",") if pid.strip()]
+                
+            res = goal_controller.update_goal(goal_id, **kwargs)
+            if not res["success"]:
+                return f"Failed to update goal: {res.get('error')}, Sir."
+            return f"Successfully updated goal '{res['goal']['title']}' (ID: {goal_id}), Sir."
             
         elif action == "delete":
             if not goal_id:
                 return "Error: goal_id is required for action 'delete', Sir."
-            database.delete_goal(goal_id)
-            service.delete_goal_vector(goal_id)
+            res = goal_controller.delete_goal(goal_id)
+            if not res["success"]:
+                return f"Failed to delete goal: {res.get('error')}, Sir."
             return f"Successfully deleted goal with ID: {goal_id}, Sir."
             
         else:

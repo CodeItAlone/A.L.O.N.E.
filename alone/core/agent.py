@@ -497,6 +497,133 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def handle_goal_intents(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.human_memory.goal_controller import goal_controller
+        
+        # 1. List Goals Intent
+        list_phrases = [
+            "list goals", "list my goals", "show goals", "show my goals",
+            "what goals do i have", "what goals do i have?", "what are my goals",
+            "what are my goals?", "goal list", "show active goals"
+        ]
+        if cleaned_input in list_phrases:
+            res = goal_controller.get_goals()
+            if not res["success"] or not res["goals"]:
+                return "Sir, you have no recorded goals at this time."
+            lines = []
+            for g in res["goals"]:
+                target_str = f" | Target: {g['targetDate']}" if g['targetDate'] else ""
+                cat_str = f" | Category: {g['category']}" if g['category'] else ""
+                prio_str = f" | Priority: {g['priority']}" if g['priority'] else ""
+                prog_str = f" | Progress: {g['progress']}%"
+                lines.append(f"- **{g['title']}** (ID: {g['id']}, Status: {g['status']}){prog_str}{cat_str}{prio_str}{target_str}")
+            return "Sir, here are your current goals:\n\n" + "\n".join(lines)
+            
+        # 2. Goal Creation Intent (using the natural language extraction pipeline)
+        create_pattern = r"(?:alone\s+)?(?:create|start|new|add)\s+goal\s+(.+)"
+        create_match = re.match(create_pattern, raw_input, re.IGNORECASE)
+        if create_match:
+            res = goal_controller.process_natural_language_goal(self.llm, raw_input)
+            if not res["success"]:
+                title = create_match.group(1).strip()
+                res = goal_controller.create_goal(title=title)
+                if not res["success"]:
+                    return f"Sir, I failed to create the goal: {res.get('error')}."
+            
+            g = res["goal"]
+            cat_part = f", category: {g['category']}" if g['category'] else ""
+            prio_part = f", priority: {g['priority']}" if g['priority'] else ""
+            target_part = f", target date: {g['targetDate']}" if g['targetDate'] else ""
+            proj_part = f", linked to project IDs: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
+            return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']}){cat_part}{prio_part}{target_part}{proj_part}."
+
+        # 3. Goal Deletion Intent
+        delete_match = re.search(
+            r"(?:alone\s+)?delete\s+goal\s+([a-zA-Z0-9_\-\.\s]+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if delete_match:
+            goal_id_or_title = delete_match.group(1).strip()
+            res = goal_controller.get_goals()
+            found_goal = None
+            if res["success"]:
+                for g in res["goals"]:
+                    if g["id"] == goal_id_or_title or g["title"].lower().strip() == goal_id_or_title.lower().strip():
+                        found_goal = g
+                        break
+            if not found_goal:
+                return f"Sir, I could not find a goal with ID or title '{goal_id_or_title}'."
+            goal_controller.delete_goal(found_goal["id"])
+            return f"Understood, Sir. I have deleted the goal '{found_goal['title']}'."
+
+        # 4. Goal Update/Progress/Linking Intent
+        link_match = re.search(
+            r"(?:alone\s+)?link\s+goal\s+([a-zA-Z0-9_\-\.\s]+?)\s+to\s+project\s+(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if link_match:
+            goal_ident = link_match.group(1).strip()
+            proj_ident = link_match.group(2).strip()
+            res = goal_controller.get_goals()
+            found_goal = None
+            if res["success"]:
+                for g in res["goals"]:
+                    if g["id"] == goal_ident or g["title"].lower().strip() == goal_ident.lower().strip():
+                        found_goal = g
+                        break
+            if not found_goal:
+                return f"Sir, I could not find a goal with ID or title '{goal_ident}'."
+            
+            link_res = goal_controller.link_project_to_goal(found_goal["id"], proj_ident)
+            if not link_res["success"]:
+                return f"Sir, I failed to link the goal to project '{proj_ident}'."
+            return f"Understood, Sir. I have linked the goal '{found_goal['title']}' to the project."
+
+        update_match = re.search(
+            r"(?:alone\s+)?(?:update|set)\s+goal\s+([a-zA-Z0-9_\-\.\s]+?)\s+(status|progress|priority|category|description|desc)\s+(?:to\s+|as\s+)?(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if update_match:
+            goal_ident = update_match.group(1).strip()
+            field = update_match.group(2).strip().lower()
+            value = update_match.group(3).strip()
+            
+            res = goal_controller.get_goals()
+            found_goal = None
+            if res["success"]:
+                for g in res["goals"]:
+                    if g["id"] == goal_ident or g["title"].lower().strip() == goal_ident.lower().strip():
+                        found_goal = g
+                        break
+            if not found_goal:
+                return f"Sir, I could not find a goal with ID or title '{goal_ident}'."
+                
+            kwargs = {}
+            if field in ("desc", "description"):
+                kwargs["description"] = value
+            elif field == "category":
+                kwargs["category"] = value
+            elif field == "priority":
+                kwargs["priority"] = value
+            elif field == "status":
+                kwargs["status"] = value
+            elif field == "progress":
+                val_clean = value.rstrip("%").strip()
+                if val_clean.isdigit():
+                    kwargs["progress"] = int(val_clean)
+                    
+            update_res = goal_controller.update_goal(found_goal["id"], **kwargs)
+            if not update_res["success"]:
+                return f"Sir, I failed to update the goal: {update_res.get('error')}."
+            display_field = "description" if field == "desc" else field
+            return f"Understood, Sir. I have updated the goal '{found_goal['title']}' {display_field}."
+
+        return None
+
     def heuristics_classify(self, user_input: str) -> str:
         import re
         cleaned_input = user_input.strip().lower()
@@ -509,6 +636,25 @@ Thought:{agent_scratchpad}"""
         ]
         if cleaned_input in system_commands:
             return "SYSTEM_COMMAND"
+            
+        # GOAL_INTENT
+        goal_patterns = [
+            r"^(?:alone\s+)?(?:create|start|new|add)\s+goal\s+",
+            r"^(?:alone\s+)?delete\s+goal\s+",
+            r"^(?:alone\s+)?link\s+goal\s+",
+            r"^(?:alone\s+)?(?:update|set)\s+goal\s+",
+            r"^list\s+goals",
+            r"^list\s+my\s+goals",
+            r"^show\s+goals",
+            r"^show\s+my\s+goals",
+            r"^what\s+goals\s+do\s+i\s+have",
+            r"^what\s+are\s+my\s+goals",
+            r"^goal\s+list",
+            r"^show\s+active\s+goals"
+        ]
+        for pat in goal_patterns:
+            if re.search(pat, cleaned_input):
+                return "GOAL_INTENT"
             
         # USER_PROFILE_UPDATE
         profile_patterns = [
@@ -601,6 +747,7 @@ Thought:{agent_scratchpad}"""
             "You are the intent classifier for A.L.O.N.E.\n"
             "Classify the user's input into exactly one of these categories:\n"
             "- USER_PROFILE_UPDATE (stating user's name, education, job, role, age, what they study, profession, or general personal profile update)\n"
+            "- GOAL_INTENT (creating, listing, deleting, updating, or linking goals/milestones)\n"
             "- MEMORY_STORE (saving system preferences, code editors, file/project paths)\n"
             "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
             "- GENERAL_CHAT (greetings, casual talk, questions about who ALONE is)\n"
@@ -618,7 +765,7 @@ Thought:{agent_scratchpad}"""
         try:
             response = self.llm.invoke(messages)
             res_text = response.content.upper().strip()
-            for cat in ["USER_PROFILE_UPDATE", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
                 if cat in res_text:
                     return cat
         except Exception as e:
@@ -731,6 +878,12 @@ Thought:{agent_scratchpad}"""
                 if "Sir" not in output:
                     output = f"Sir, {output}"
                 return output
+
+            # --- GOAL_INTENT DIRECT ROUTING ---
+            if intent == "GOAL_INTENT":
+                goal_res = self.handle_goal_intents(cleaned_input, user_input)
+                if goal_res is not None:
+                    return goal_res
 
             # --- MEMORY RETRIEVE DIRECT ROUTING ---
             if intent == "MEMORY_RETRIEVE":
