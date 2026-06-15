@@ -20,3 +20,8 @@ alone/test_history.json
 # OS specific
 .DS_Store
 Thumbs.db
+
+# PDFs
+*.pdf
+ALONE_Comprehensive_PRD.pdf
+JARVIS_PRD_TRD_Roadmap.pdf
