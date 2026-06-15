@@ -62,7 +62,10 @@ def init_db():
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             description TEXT,
+            category TEXT DEFAULT '',
+            priority TEXT DEFAULT '',
             status TEXT CHECK(status IN ('pending', 'in_progress', 'achieved', 'failed')) DEFAULT 'pending',
+            progress INTEGER DEFAULT 0,
             parent_goal_id TEXT REFERENCES goals(id) ON DELETE CASCADE,
             target_date TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -82,6 +85,17 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        # 6. Project-Goal Linking Table
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS project_goals (
+            project_id TEXT,
+            goal_id TEXT,
+            PRIMARY KEY (project_id, goal_id),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE
+        );
+        """)
         
         # Ensure phase and priority columns exist for older databases
         cursor.execute("PRAGMA table_info(projects)")
@@ -90,6 +104,16 @@ def init_db():
             cursor.execute("ALTER TABLE projects ADD COLUMN phase TEXT DEFAULT ''")
         if "priority" not in columns:
             cursor.execute("ALTER TABLE projects ADD COLUMN priority TEXT DEFAULT ''")
+
+        # Ensure category, priority, and progress columns exist for older goals databases
+        cursor.execute("PRAGMA table_info(goals)")
+        goal_columns = [row["name"] for row in cursor.fetchall()]
+        if "category" not in goal_columns:
+            cursor.execute("ALTER TABLE goals ADD COLUMN category TEXT DEFAULT ''")
+        if "priority" not in goal_columns:
+            cursor.execute("ALTER TABLE goals ADD COLUMN priority TEXT DEFAULT ''")
+        if "progress" not in goal_columns:
+            cursor.execute("ALTER TABLE goals ADD COLUMN progress INTEGER DEFAULT 0")
 
         conn.commit()
         conn.close()
@@ -245,34 +269,49 @@ def get_goals(status=None):
         conn = get_connection()
         cursor = conn.cursor()
         if status:
-            cursor.execute("SELECT id, title, description, status, parent_goal_id, target_date, created_at, updated_at FROM goals WHERE status = ?", (status,))
+            cursor.execute("SELECT id, title, description, category, priority, status, progress, parent_goal_id, target_date, created_at, updated_at FROM goals WHERE status = ?", (status,))
         else:
-            cursor.execute("SELECT id, title, description, status, parent_goal_id, target_date, created_at, updated_at FROM goals")
+            cursor.execute("SELECT id, title, description, category, priority, status, progress, parent_goal_id, target_date, created_at, updated_at FROM goals")
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
 
-def add_goal(goal_id, title, description, status="pending", parent_goal_id=None, target_date=None):
+def add_goal(goal_id, title, description, status="pending", parent_goal_id=None, target_date=None, category="", priority="", progress=0):
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
-        INSERT INTO goals (id, title, description, status, parent_goal_id, target_date, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (goal_id, title, description, status, parent_goal_id, target_date, now, now))
+        INSERT INTO goals (id, title, description, category, priority, status, progress, parent_goal_id, target_date, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (goal_id, title, description, category, priority, status, progress, parent_goal_id, target_date, now, now))
         conn.commit()
         conn.close()
         print(f"[MEMORY SAVE] goal='{title}', id='{goal_id}'")
 
-def update_goal(goal_id, title, description, status, parent_goal_id=None, target_date=None):
+def update_goal(goal_id, title, description, status, parent_goal_id=None, target_date=None, category=None, priority=None, progress=None):
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-        UPDATE goals SET title = ?, description = ?, status = ?, parent_goal_id = ?, target_date = ?, updated_at = ? WHERE id = ?
-        """, (title, description, status, parent_goal_id, target_date, now, goal_id))
+        
+        query = "UPDATE goals SET title = ?, description = ?, status = ?, parent_goal_id = ?, target_date = ?, updated_at = ?"
+        params = [title, description, status, parent_goal_id, target_date, now]
+        
+        if category is not None:
+            query += ", category = ?"
+            params.append(category)
+        if priority is not None:
+            query += ", priority = ?"
+            params.append(priority)
+        if progress is not None:
+            query += ", progress = ?"
+            params.append(progress)
+            
+        query += " WHERE id = ?"
+        params.append(goal_id)
+        
+        cursor.execute(query, tuple(params))
         conn.commit()
         conn.close()
         print(f"[MEMORY UPDATE] goal='{title}', id='{goal_id}'")
