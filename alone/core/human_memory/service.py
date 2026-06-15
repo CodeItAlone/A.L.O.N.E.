@@ -73,17 +73,35 @@ def delete_project_vector(project_id):
         print(f"[Memory Warning] Failed to delete project vector '{project_id}': {e}")
 
 # --- Goals Vector Sync ---
-def sync_goal_to_vector(goal_id, title, description, status, parent_goal_id=None, target_date=None):
+def sync_goal_to_vector(goal_id, title, description, status, parent_goal_id=None, target_date=None, category="", priority="", progress=0, project_ids=None):
     if goals_vector_col is None:
         return
     try:
         doc_text = f"Goal: {title}. Description: {description or 'None'}. Status: {status}."
+        if category:
+            doc_text += f" Category: {category}."
+        if priority:
+            doc_text += f" Priority: {priority}."
+        if progress is not None:
+            doc_text += f" Progress: {progress}%."
         if target_date:
             doc_text += f" Target Date: {target_date}."
+        if project_ids:
+            doc_text += f" Linked Projects: {', '.join(project_ids)}."
         
-        meta = {"goal_id": goal_id, "type": "goal", "title": title, "status": status}
+        meta = {
+            "goal_id": goal_id, 
+            "type": "goal", 
+            "title": title, 
+            "status": status,
+            "category": category or "",
+            "priority": priority or "",
+            "progress": int(progress or 0)
+        }
         if parent_goal_id:
             meta["parent_goal_id"] = parent_goal_id
+        if project_ids:
+            meta["project_ids"] = ",".join(project_ids)
             
         goals_vector_col.upsert(
             documents=[doc_text],
@@ -142,12 +160,22 @@ def get_active_context_summary() -> str:
         projects_str = "\n".join(projects_lines) if projects_lines else "  * No active projects."
 
         # Load current active/pending goals
-        goals = database.get_goals()
-        active_goals = [g for g in goals if g["status"] in ("pending", "in_progress")]
+        from core.human_memory.goal_repository import goal_repository
+        goals = goal_repository.find_all()
+        active_goals = [g for g in goals if g.status in ("pending", "in_progress")]
+        projects_map = {p["id"]: p["name"] for p in database.get_projects()}
+        
         goals_lines = []
         for g in active_goals:
-            target = f" | Target: {g['target_date']}" if g['target_date'] else ""
-            goals_lines.append(f"  * Goal: {g['title']} | Status: {g['status']}{target}\n    Desc: {g['description'] or 'No description'}")
+            target = f" | Target: {g.targetDate}" if g.targetDate else ""
+            cat_str = f" | Category: {g.category}" if g.category else ""
+            prio_str = f" | Priority: {g.priority}" if g.priority else ""
+            prog_str = f" | Progress: {g.progress}%"
+            
+            proj_names = [projects_map[pid] for pid in g.projectIds if pid in projects_map]
+            proj_str = f" | Projects: {', '.join(proj_names)}" if proj_names else ""
+            
+            goals_lines.append(f"  * Goal: {g.title} | Status: {g.status}{prog_str}{cat_str}{prio_str}{target}{proj_str}\n    Desc: {g.description or 'No description'}")
         goals_str = "\n".join(goals_lines) if goals_lines else "  * No active goals."
 
         # Load relationships
