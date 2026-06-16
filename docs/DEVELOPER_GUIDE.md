@@ -74,7 +74,7 @@ C:\Users\SHAN KUMAR\Desktop\ALONE
 As part of maintaining high-standard engineering, here is a detailed audit of A.L.O.N.E.'s codebase:
 
 ### 🌟 Architectural Strengths
-1.  **Thread Safety**: By offloading heavy audio recording, ONNX inference, and console scanning to background threads, and routing all voice output synthesis to a main thread `QTimer`, the GUI remains responsive and avoids typical Windows COM threading violations.
+1.  **Thread Safety & Responsive TTS**: By offloading heavy audio recording, ONNX inference, and console scanning to background threads, and executing text-to-speech in a dedicated background `TTSWorker` thread (running an isolated Python subprocess for SAPI5 SAPI COM calls on Windows), the GUI remains responsive and avoids both Windows COM threading apartment violations and speech synthesis device locking.
 2.  **Low-Latency Bypass**: The `QUICK_COMMANDS` static routing in `core/agent.py` completely side-steps the LLM, enabling zero-latency execution in under 1 second for standard queries.
 3.  **Graceful Audio Fallback**: The voice listener features automatic hardware checks and falls back from standard WebRTC VAD C-bindings to high-precision energy-based RMS voice activity detection, ensuring the system runs smoothly across standard installations.
 
