@@ -25,11 +25,13 @@ A.L.O.N.E. acts as an offline hardware-linked digital butler modeled after scien
 ## ✨ Features
 
 *   **🎙️ Always-On OWW Detection**: Low-overhead wake-word detection using `openwakeword` with both custom trained and fallback chimes.
+*   **⚡ One-Shot Wake-Word Stripping**: Detects wake word and command spoken in a single breath (e.g. *"Hey Alone who am I?"*), stripping the wake word dynamically and executing the command instantly.
+*   **🔄 Conversation Follow-Up Mode**: Bypasses wake word requirement for 5 seconds after the assistant finishes speaking, allowing continuous fluid conversation.
 *   **🎤 Smart Silence Cutoff (VAD)**: Dynamic capture driven by WebRTC VAD and audio energy calibration. Stops recording immediately (600ms) after you stop speaking and limits recording duration to a hard 9-second window.
 *   **🧠 Local LLM ReAct Agent**: Runs `alone-model` (derived from llama3.2:3b) locally via ChatOllama, reasoning and selecting system tools dynamically.
 *   **💾 Hybrid Semantic & Structured Memory**: Combines an offline ChromaDB vector database for conversational history and a structured **SQLite database** to store and update categorized user preferences (editor, programming language, user name, etc.) with automatic legacy ChromaDB preference migration.
 *   **🛡️ Active Window Safety Layer**: Features a robust confidence-scoring safety layer (`FollowUpValidationService`) to filter out ambient noise and video transcripts (e.g. "thanks for watching", "like and subscribe") from triggering accidental tool execution or agent reasoning during active listening windows.
-*   **🔊 Non-Blocking Background TTS Thread**: Utilizes a dedicated background worker thread to execute pyttsx3 speech synthesis asynchronously, avoiding main-thread COM/GUI locks and dispatching HUD visualizer status updates.
+*   **🔊 Non-Blocking & Interruptible Background TTS**: Runs pyttsx3 asynchronously in a background thread and isolated Windows subprocess, enabling **instant barge-in interruption** (saying *"stop"*, *"pause"*, or *"cancel"* terminates speaking immediately and opens active listening).
 *   **⚡ Zero-Latency Quick Commands**: Intercepts common instructions (time, date, screenshot, opening YouTube/GitHub/VS Code) to execute them instantly under 1 second, bypassing LLM inference.
 *   **🖥️ Circular HUD Interface**: A sleek, minimal PyQt5 HUD bubble that animates and responds to voice activity.
 *   **🚀 Background Boot Warm-up**: Pre-warms the Whisper RAM and Ollama VRAM in parallel on background threads right at startup. Announce ready status chimes inside 20 seconds.
