@@ -4,10 +4,14 @@ import sys
 import gc
 import threading
 import time
+import subprocess
+from core.state import AssistantState, get_state, set_state
 
 _speech_queue = queue.Queue()
 _tts_thread = None
 _tts_active = threading.Event()
+_tts_process = None
+_tts_process_lock = threading.Lock()
 
 def speak(text):
     """Speak synchronously (blocks the caller until done)"""
@@ -25,6 +29,26 @@ def speak_async(text):
         _speech_queue.put(text)
         start_tts_thread()
 
+def stop_tts():
+    global _tts_process
+    with _tts_process_lock:
+        if _tts_process and _tts_process.poll() is None:
+            print("[DEBUG SPEAKER] Terminating TTS process...")
+            _tts_process.terminate()
+            try:
+                _tts_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                _tts_process.kill()
+            _tts_process = None
+
+def clear_speech_queue():
+    while not _speech_queue.empty():
+        try:
+            _speech_queue.get_nowait()
+            _speech_queue.task_done()
+        except queue.Empty:
+            break
+
 def start_tts_thread():
     global _tts_thread
     if _tts_thread is None or not _tts_thread.is_alive():
@@ -33,9 +57,7 @@ def start_tts_thread():
         _tts_thread.start()
 
 def _tts_worker():
-    from core.listener import pause_listening, resume_listening
     from ui.window import signals
-    import subprocess
     
     engine = None
     if sys.platform != "win32":
@@ -69,13 +91,8 @@ def _tts_worker():
             _tts_active.set()
             print(f"[DEBUG SPEAKER] Dequeuing and speaking: '{text[:40]}...'")
             
-            # Emit SPEAKING status to update visualizers/labels in the GUI
-            try:
-                signals.status_changed.emit("SPEAKING")
-            except Exception:
-                pass
-                
-            pause_listening()    # stop microphone input first
+            # Transition state to SPEAKING
+            set_state(AssistantState.SPEAKING)
             print(f"ALONE: {text}")
             
             try:
@@ -96,7 +113,12 @@ def _tts_worker():
                         "engine.runAndWait()\n",
                         text
                     ]
-                    subprocess.run(cmd, check=True)
+                    global _tts_process
+                    with _tts_process_lock:
+                        _tts_process = subprocess.Popen(cmd)
+                    _tts_process.wait()
+                    with _tts_process_lock:
+                        _tts_process = None
                 else:
                     if engine:
                         engine.say(text)
@@ -104,21 +126,25 @@ def _tts_worker():
             except Exception as speak_err:
                 print(f"[ALONE TTS WORKER ERROR] speak failed: {speak_err}")
                 
-            resume_listening()   # restart microphone input after speaking
             _tts_active.clear()
             
-            # Transition GUI status back to idle or thinking depending on agent state
-            try:
-                import main
-                if main._agent_active.is_set():
-                    signals.status_changed.emit("THINKING")
-                else:
-                    signals.status_changed.emit("IDLE")
-            except Exception:
+            # Transition state
+            current_s = get_state()
+            if current_s == AssistantState.SPEAKING:
+                # Naturally finished speaking, transition to FOLLOW_UP
+                set_state(AssistantState.FOLLOW_UP)
+            
+            # Log transition back depending on main agent active state if not follow up/listening
+            current_s = get_state()
+            if current_s not in (AssistantState.FOLLOW_UP, AssistantState.LISTENING, AssistantState.INTERRUPTED):
                 try:
-                    signals.status_changed.emit("IDLE")
+                    import main
+                    if main._agent_active.is_set():
+                        set_state(AssistantState.THINKING)
+                    else:
+                        set_state(AssistantState.IDLE)
                 except Exception:
-                    pass
+                    set_state(AssistantState.IDLE)
                     
         # Explicit cleanup on shutdown
         if engine:
