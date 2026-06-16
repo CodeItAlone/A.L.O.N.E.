@@ -1038,7 +1038,7 @@ class AloneHUDWindow(QWidget):
         self.status_label.setText(status_upper)
         
         # Toggle component displays based on status state
-        if status_upper == "LISTENING":
+        if status_upper in ("LISTENING", "FOLLOW_UP"):
             self.status_label.setStyleSheet("color: #00D4FF; border: none; background: transparent;")
             self.waveform.show()
             self.pulse.hide()
@@ -1048,7 +1048,7 @@ class AloneHUDWindow(QWidget):
             self.waveform.hide()
             self.pulse.show()
             self.balancer.hide()
-        elif status_upper == "SPEAKING":
+        elif status_upper in ("SPEAKING", "INTERRUPTED"):
             self.status_label.setStyleSheet("color: #00D4FF; border: none; background: transparent;")
             self.waveform.hide()
             self.pulse.hide()
@@ -1061,7 +1061,7 @@ class AloneHUDWindow(QWidget):
 
     def handle_amplitude(self, rms):
         # Forward RMS volume spikes straight to visualizer
-        if self.status_label.text() == "LISTENING":
+        if self.status_label.text() in ("LISTENING", "FOLLOW_UP"):
             self.waveform.set_amplitude(rms)
 
     def set_user_command(self, text):
