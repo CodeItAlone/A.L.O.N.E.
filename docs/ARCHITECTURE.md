@@ -11,12 +11,11 @@ A.L.O.N.E. operates as a hybrid event-driven and multi-threaded desktop applicat
 ```mermaid
 graph TD
     %% Threads
-    subgraph Main Thread [Main Thread GUI & TTS]
+    subgraph Main Thread [Main Thread GUI]
         A[main.py: App Loop] --> B[ui.window: PyQt5 HUD]
-        QTimer[QTimer 100ms] -->|Drains queue| TTS[core.speaker: pyttsx3]
     end
 
-    subgraph Background Threads [Background Inference & Audio]
+    subgraph Background Threads [Background Inference, Audio & TTS]
         Prewarm[core.preloader: Prewarm Thread] -->|Pre-warms| LLM_VRAM[Ollama VRAM]
         Prewarm -->|Pre-warms| Whisper_RAM[Whisper RAM]
         
@@ -25,6 +24,8 @@ graph TD
         VAD -->|Saves Wav| Callback[main.py: handle_audio callback]
         
         TextInputThread[main.py: TextInput] -->|CLI keyboard inputs| AgentExec[core.agent: run_agent]
+        
+        TTSWorker[core.speaker: TTSWorker Thread] -->|subprocess.Popen| TTSSubprocess[pyttsx3 Subprocess]
     end
 
     %% Modules & Databases
@@ -41,7 +42,7 @@ graph TD
     %% Flow Out
     QuickCmd -->|TTS Text| Enqueue[speaker.py: speak_async]
     Brain -->|TTS Text| Enqueue
-    Enqueue -->|Drained by QTimer| TTS
+    Enqueue -->|Queue get| TTSWorker
 ```
 
 ---
@@ -52,14 +53,18 @@ To prevent application freezing and comply with Windows COM multi-threaded apart
 
 1.  **Main Thread**:
     *   Initializes PyQt5 HUD and Settings windows.
-    *   Spins up a 100ms `QTimer` (`speech_timer_tick`) which checks the speech queue and executes `pyttsx3` text-to-speech. This prevents audio-card device locking.
-2.  **VoiceListener Background Thread**:
+    *   Runs the PyQt5 event loop.
+2.  **TTSWorker Background Thread**:
+    *   Spins up a dedicated thread that consumes the speech queue.
+    *   On Windows, runs `pyttsx3` inside a standalone Python subprocess via `subprocess.Popen` to prevent freezing the GUI and allow clean/instant process termination (barge-in interruption).
+3.  **VoiceListener Background Thread**:
     *   Initiated on boot. Runs continuous microphone streaming using `sounddevice`.
     *   Processes 80ms chunks through the `openwakeword` ONNX engine.
     *   Closes the wake-word stream upon trigger and captures the voice command using a fast WebRTC VAD loop, writing the command to a temporary `.wav` file before passing its path to `handle_audio()`.
-3.  **TextInput Background Thread**:
+    *   During active speech synthesis, continues capturing audio chunks and running fast Whisper transcribing to monitor for user stop words (e.g., "stop", "cancel"), triggering TTS worker termination upon barge-in.
+4.  **TextInput Background Thread**:
     *   Waits for fallback terminal keyboard inputs and safely passes text commands to the agent.
-4.  **Prewarmer Background Thread**:
+5.  **Prewarmer Background Thread**:
     *   Executed first. Pre-warms the Ollama VRAM, faster-whisper RAM, and wake word model files sequentially, raising a `threading.Event()` when ready to unlock the voice listener.
 
 ---
@@ -103,10 +108,10 @@ To prevent application freezing and comply with Windows COM multi-threaded apart
 *   **Dependencies**: `ollama`, `langchain-ollama`, `core.memory`.
 
 ### 7. `core/speaker.py`
-*   **Responsibility**: Synchronous, main-thread-safe Text-to-Speech (TTS) synthesis.
+*   **Responsibility**: Dedicated background thread and process-level Text-to-Speech (TTS) synthesis.
 *   **Inputs**: Response strings via `speak_async()` thread-safe queue.
-*   **Outputs**: Spoken audio via system speakers, CLI stdout print.
-*   **Dependencies**: `pyttsx3`, `pythoncom`.
+*   **Outputs**: Spoken audio via system speakers (using subprocess pyttsx3 instances on Windows to allow instant interruption), CLI stdout print.
+*   **Dependencies**: `pyttsx3`, `subprocess`.
 
 ### 8. `core/memory.py`
 *   **Responsibility**: Long-term persistent vector database memory storage and semantic context retrieval.
