@@ -8,6 +8,9 @@ import sounddevice as sd
 import yaml
 import re
 from openwakeword.model import Model
+from core.state import AssistantState, get_state, set_state, get_follow_up_start_time, reset_follow_up_timer
+
+_interrupt_detected = threading.Event()
 
 # Active listening globals
 _last_interaction_time = 0.0
@@ -49,7 +52,7 @@ def normalize_text(text):
 def match_wake_word_fuzzy(normalized_text, threshold=0.85):
     """
     Checks if normalized_text starts with or contains a fuzzy match of target phrases.
-    Targets: "hey alone", "ok alone".
+    Targets: "hey alone", "ok alone", "listen".
     Do NOT trigger on standalone "alone".
     Returns (detected, matched_phrase, confidence, clean_command).
     """
@@ -59,22 +62,32 @@ def match_wake_word_fuzzy(normalized_text, threshold=0.85):
         
     best_sim = 0.0
     best_match_phrase = ""
-    best_match_len = 0
     
-    # Check "hey alone" and "ok alone" targets (2 words)
-    targets = ["hey alone", "ok alone"]
+    # 1. Fuzzy match primary targets
+    # We support 2-word targets: "hey alone", "ok alone"
+    two_word_targets = ["hey alone", "ok alone"]
     if len(words) >= 2:
         for i in range(len(words) - 1):
             phrase = words[i] + " " + words[i+1]
-            for target in targets:
+            for target in two_word_targets:
                 dist = levenshtein_distance(phrase, target)
                 sim = 1.0 - (dist / max(len(phrase), len(target)))
                 if sim > best_sim:
                     best_sim = sim
                     best_match_phrase = phrase
-                    best_match_len = 2
                     
-    # Also support other manual phonetic triggers for high confidence (always 2 words)
+    # We support 1-word targets: "listen"
+    one_word_targets = ["listen"]
+    for i in range(len(words)):
+        phrase = words[i]
+        for target in one_word_targets:
+            dist = levenshtein_distance(phrase, target)
+            sim = 1.0 - (dist / max(len(phrase), len(target)))
+            if sim > best_sim:
+                best_sim = sim
+                best_match_phrase = phrase
+
+    # 2. Exact match phonetic triggers
     two_word_phonetic_triggers = [
         "hey aloon", "hey alon", "hey allon", "hey alloon", "hey allone", "hey loone", 
         "hay alone", "hay alon", "hay alloon", "hey salon", "hey along", "hey low", 
@@ -85,12 +98,20 @@ def match_wake_word_fuzzy(normalized_text, threshold=0.85):
         for i in range(len(words) - 1):
             phrase = words[i] + " " + words[i+1]
             if phrase in two_word_phonetic_triggers:
-                sim = 0.98
-                if sim > best_sim:
-                    best_sim = sim
+                if 0.98 > best_sim:
+                    best_sim = 0.98
                     best_match_phrase = phrase
-                    best_match_len = 2
-
+                    
+    one_word_phonetic_triggers = [
+        "listening", "listened", "lessen", "lesson", "liston"
+    ]
+    for i in range(len(words)):
+        phrase = words[i]
+        if phrase in one_word_phonetic_triggers:
+            if 0.98 > best_sim:
+                best_sim = 0.98
+                best_match_phrase = phrase
+                
     if best_sim >= threshold:
         clean_command = normalized_text
         if normalized_text.startswith(best_match_phrase):
@@ -353,11 +374,40 @@ def _listen_loop(callback):
     threshold = ww_cfg.get("threshold", 0.5)
     chunk_len = ww_cfg.get("chunk_size", 1280)
     
+    interrupt_chunks = []
+    new_chunks_count = 0
+    
     print("\n[*] ALONE: Continuous Listening active. Say wake word to activate.")
     
     try:
         while _listening:
             if not _paused:
+                # 1. Check if FOLLOW_UP timed out after 5 seconds
+                if get_state() == AssistantState.FOLLOW_UP:
+                    if time.time() - get_follow_up_start_time() > 5.0:
+                        set_state(AssistantState.IDLE)
+                        
+                # 2. Check if interrupt was detected by background thread
+                if _interrupt_detected.is_set():
+                    _interrupt_detected.clear()
+                    set_state(AssistantState.LISTENING)
+                    _play_beep()
+                    if _stream:
+                        try:
+                            _stream.stop()
+                            _stream.close()
+                        except Exception:
+                            pass
+                        _stream = None
+                    audio_path = record_until_silence()
+                    if audio_path:
+                        callback(audio_path, wake_word_detected=True)
+                    interrupt_chunks.clear()
+                    new_chunks_count = 0
+                    if oww_model:
+                        oww_model.reset()
+                    continue
+            
                 if _stream is None:
                     try:
                         time.sleep(0.4)
@@ -372,8 +422,59 @@ def _listen_loop(callback):
                 try:
                     audio_chunk, overflow = _stream.read(chunk_len)
                     audio_data = audio_chunk.flatten()
+                    
+                    # 3. If SPEAKING, collect interrupt chunks and check in background thread
+                    if get_state() == AssistantState.SPEAKING:
+                        interrupt_chunks.append(audio_data.copy())
+                        if len(interrupt_chunks) > 20:
+                            interrupt_chunks.pop(0)
+                        new_chunks_count += 1
+                        if new_chunks_count >= 12:
+                            new_chunks_count = 0
+                            
+                            def check_interrupt(chunks):
+                                try:
+                                    import tempfile
+                                    import wave
+                                    import os
+                                    from core.transcriber import transcribe
+                                    from core.speaker import stop_tts, clear_speech_queue
+                                    
+                                    temp_path = os.path.join(tempfile.gettempdir(), f"alone_interrupt_{int(time.time() * 1000)}.wav")
+                                    with wave.open(temp_path, 'wb') as wf:
+                                        wf.setnchannels(1)
+                                        wf.setsampwidth(2)
+                                        wf.setframerate(sample_rate)
+                                        wf.writeframes(np.concatenate(chunks).tobytes())
+                                    
+                                    text = transcribe(temp_path)
+                                    try:
+                                        os.remove(temp_path)
+                                    except Exception:
+                                        pass
+                                        
+                                    if text:
+                                        normalized = normalize_text(text)
+                                        words = normalized.split()
+                                        interrupts = {"stop", "pause", "cancel", "enough", "listen"}
+                                        if any(w in interrupts for w in words):
+                                            print(f"[VOICE UX] Interrupt word detected in TTS stream: '{normalized}'")
+                                            set_state(AssistantState.INTERRUPTED)
+                                            stop_tts()
+                                            clear_speech_queue()
+                                            _interrupt_detected.set()
+                                except Exception as e:
+                                    print(f"[Interrupt Listener Error] {e}")
+                            
+                            threading.Thread(target=check_interrupt, args=(list(interrupt_chunks),), daemon=True).start()
+                        continue
+                    else:
+                        if interrupt_chunks:
+                            interrupt_chunks.clear()
+                            new_chunks_count = 0
+
                     if oww_model:
-                        is_within_active_window = (time.time() - _last_interaction_time <= _active_window_duration)
+                        is_within_active_window = (get_state() == AssistantState.FOLLOW_UP)
                         rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
                         
                         prediction = oww_model.predict(audio_data)
@@ -385,14 +486,9 @@ def _listen_loop(callback):
                             
                         if prob >= threshold:
                             print(f"\n[!] Wake word detected! Confidence: {prob:.2f}")
+                            set_state(AssistantState.LISTENING)
                             _play_beep()
                             
-                            try:
-                                from ui.window import signals
-                                signals.status_changed.emit("LISTENING")
-                            except Exception:
-                                pass
-                                
                             # Close the wake word input stream temporarily to allow command recording
                             _stream.stop()
                             _stream.close()
@@ -406,6 +502,7 @@ def _listen_loop(callback):
                             print(f"[*] ALONE: Awaiting wake word...")
                         elif is_within_active_window and rms >= energy_threshold:
                             print(f"\n[Active Window] Speech detected (RMS: {rms:.1f}). Capturing direct command...")
+                            set_state(AssistantState.LISTENING)
                             _stream.stop()
                             _stream.close()
                             _stream = None
@@ -418,28 +515,26 @@ def _listen_loop(callback):
                                 normalized_text = normalize_text(text)
                                 if normalized_text.strip() != "":
                                     _play_beep()
-                                    try:
-                                        from ui.window import signals
-                                        signals.status_changed.emit("LISTENING")
-                                    except Exception:
-                                        pass
                                     callback(audio_path, active_window_bypass=True)
                                 else:
                                     print("[Active Window] Empty speech detected.")
+                                    set_state(AssistantState.IDLE)
                                     if os.path.exists(audio_path):
                                         try:
                                             os.remove(audio_path)
                                         except Exception:
                                             pass
+                            else:
+                                set_state(AssistantState.IDLE)
                             oww_model.reset()
                     else:
                         # VAD Speech-To-Text fallback for custom wake word "hey alone"
                         rms = np.sqrt(np.mean(audio_data.astype(np.float32) ** 2))
                         if rms >= energy_threshold:
-                            is_within_active_window = (time.time() - _last_interaction_time <= _active_window_duration)
+                            is_within_active_window = (get_state() == AssistantState.FOLLOW_UP)
                             
                             if is_within_active_window:
-                                print(f"\n[VAD Fallback] Speech detected (RMS: {rms:.1f}) within ACTIVE WINDOW ({time.time() - _last_interaction_time:.1f}s elapsed).")
+                                print(f"\n[VAD Fallback] Speech detected (RMS: {rms:.1f}) within ACTIVE WINDOW.")
                             else:
                                 print(f"\n[VAD Fallback] Speech detected (RMS: {rms:.1f}). Capturing potential command...")
                             
@@ -464,12 +559,8 @@ def _listen_loop(callback):
                                 
                                 if detected:
                                     # User spoke the wake word (either alone or as a one-shot command)
+                                    set_state(AssistantState.LISTENING)
                                     _play_beep()
-                                    try:
-                                        from ui.window import signals
-                                        signals.status_changed.emit("LISTENING")
-                                    except Exception:
-                                        pass
                                         
                                     is_only_wake_word = (clean_command == "")
                                     print(f"[DEBUG LOGGING] Command extraction result: '{clean_command}' (Is Only Wake Word: {is_only_wake_word})")
@@ -488,11 +579,7 @@ def _listen_loop(callback):
                                             callback(cmd_audio_path, wake_word_detected=True)
                                         else:
                                             print("[VAD Fallback] No command detected.")
-                                            try:
-                                                from ui.window import signals
-                                                signals.status_changed.emit("IDLE")
-                                            except Exception:
-                                                pass
+                                            set_state(AssistantState.IDLE)
                                     else:
                                         print("[VAD Fallback] One-shot command detected.")
                                         callback(audio_path, wake_word_detected=True)
@@ -502,20 +589,12 @@ def _listen_loop(callback):
                                         # Accept direct command within the active window only if transcription has content
                                         if normalized_text.strip() != "":
                                             print("[VAD Fallback] Active window bypass active. SUCCESS: Direct command accepted!")
+                                            set_state(AssistantState.LISTENING)
                                             _play_beep()
-                                            try:
-                                                from ui.window import signals
-                                                signals.status_changed.emit("LISTENING")
-                                            except Exception:
-                                                pass
                                             callback(audio_path, active_window_bypass=True)
                                         else:
                                             print("[VAD Fallback] Empty speech detected in active window.")
-                                            try:
-                                                from ui.window import signals
-                                                signals.status_changed.emit("IDLE")
-                                            except Exception:
-                                                pass
+                                            set_state(AssistantState.IDLE)
                                             if os.path.exists(audio_path):
                                                 try:
                                                     os.remove(audio_path)
@@ -524,11 +603,7 @@ def _listen_loop(callback):
                                     else:
                                         # Outside active window and no wake word -> ignore
                                         print("[VAD Fallback] No wake word detected in speech.")
-                                        try:
-                                            from ui.window import signals
-                                            signals.status_changed.emit("IDLE")
-                                        except Exception:
-                                            pass
+                                        set_state(AssistantState.IDLE)
                                         if os.path.exists(audio_path):
                                             try:
                                                 os.remove(audio_path)
