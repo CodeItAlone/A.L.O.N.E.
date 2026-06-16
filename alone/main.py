@@ -40,23 +40,17 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
     Called by listener — runs in background thread.
     Updates GUI thread-safely via custom signals.
     """
+    from core.state import AssistantState, get_state, set_state
+    
     try:
         print(f"[PIPELINE DIAGNOSTIC] Raw audio file received: {audio_path}")
-        try:
-            from ui.window import signals
-            signals.status_changed.emit("THINKING")
-        except Exception:
-            pass
+        set_state(AssistantState.THINKING)
 
         text = transcribe(audio_path)
         print(f"[PIPELINE DIAGNOSTIC] Whisper transcription: \"{text}\"")
         if not text or text.strip() == "":
             speak_async("I didn't catch that, Sir.")
-            try:
-                from ui.window import signals
-                signals.status_changed.emit("IDLE")
-            except Exception:
-                pass
+            set_state(AssistantState.IDLE)
             return
         
         # ----------------------------------------------------
@@ -70,15 +64,20 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
         
         # Check active window bypass
         import time
-        is_active_window = active_window_bypass or (time.time() - get_last_interaction_time() <= _active_window_duration)
+        is_active_window = active_window_bypass or (get_state() == AssistantState.FOLLOW_UP) or (time.time() - get_last_interaction_time() <= _active_window_duration)
         print(f"[PIPELINE DIAGNOSTIC] Listening window check: is_active_window={is_active_window}")
         
         if wake_word_detected:
-            detected = True
-            matched_phrase = "PRE-DETECTED"
-            confidence = 1.0
-            clean_command = normalized_text
-            print("[DEBUG LOGGING] Wake-word pre-detected by listener. Bypassing wake-word extraction.")
+            # Fuzzy match to find the wake word and strip it!
+            detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
+            if not detected:
+                # Fallback if fuzzy matching didn't match the pre-detected wake word
+                detected = True
+                matched_phrase = "PRE-DETECTED"
+                confidence = 1.0
+                clean_command = normalized_text
+            else:
+                print(f"[DEBUG LOGGING] Wake-word pre-detected. Stripped matched wake-word: '{matched_phrase}'")
         else:
             detected, matched_phrase, confidence, clean_command = match_wake_word_fuzzy(normalized_text)
             print(f"[DEBUG LOGGING] Wake-word matching result: {'SUCCESS' if detected else 'FAILED'} (Matched Phrase: '{matched_phrase}', Confidence: {confidence:.2f})")
@@ -102,11 +101,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
                 )
                 if not is_valid:
                     speak_async("I may have heard background speech. Please repeat the command.")
-                    try:
-                        from ui.window import signals
-                        signals.status_changed.emit("IDLE")
-                    except Exception:
-                        pass
+                    set_state(AssistantState.IDLE)
                     return
         else:
             if detected:
@@ -120,11 +115,7 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
         # ----------------------------------------------------
                 
         if not clean_text:
-            try:
-                from ui.window import signals
-                signals.status_changed.emit("IDLE")
-            except Exception:
-                pass
+            set_state(AssistantState.IDLE)
             return
         
         # Update user bubble in GUI
