@@ -11,6 +11,6 @@
 - [alone/core/human_memory/database.py](file:///c:/Users/SHAN%20KUMAR/Desktop/ALONE/alone/core/human_memory/database.py): SQLite structured relational database CRUD
 
 ## Key Concepts
-- **Active Listening Bypass**: Inside the active follow-up window (default 15s, recommended 5s), the wake word is bypassed, accepting direct follow-ups.
+- **Active Listening Bypass**: Inside the active follow-up window (5 seconds), the wake word is bypassed, accepting direct follow-ups in a state-machine managed loop.
 - **Safety Layer**: Follow-ups undergo validation checks to filter out video speech/ambient noises (confidence matching and relevance analysis).
-- **Background Speech Synthesis**: pyttsx3 runs on a background thread using COM subprocess execution on Windows to prevent GUI freezing.
+- **Background Speech Synthesis**: pyttsx3 runs on a dedicated background TTSWorker thread, launching a standalone Python subprocess via `subprocess.Popen` on Windows to prevent GUI freezing and enable instant barge-in interruption.
