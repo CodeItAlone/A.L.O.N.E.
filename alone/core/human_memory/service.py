@@ -202,7 +202,16 @@ def get_active_context_summary() -> str:
 def search_human_memory(query: str, top_k: int = 2) -> str:
     """Performs semantic search across projects, goals, and relationships, returning matches."""
     results_text = []
-    
+
+    # 0. Search Relationships Memory Provider first
+    try:
+        from core.human_memory.relationship_memory_provider import relationship_memory_provider
+        rel_match = relationship_memory_provider.retrieve(query)
+        if rel_match:
+            results_text.append(rel_match)
+    except Exception as e:
+        print(f"[Memory Warning] Relationship provider search failed: {e}")
+
     # 1. Search Projects
     if projects_vector_col:
         try:
@@ -221,12 +230,12 @@ def search_human_memory(query: str, top_k: int = 2) -> str:
         except Exception:
             pass
 
-    # 3. Search Relationships
+    # 3. Search Relationships (Fallback/Semantic)
     if relationships_vector_col:
         try:
             res = relationships_vector_col.query(query_texts=[query], n_results=top_k)
             if res and res["documents"] and res["documents"][0]:
-                results_text.append("Matched Contacts:\n" + "\n".join([f"  - {doc}" for doc in res["documents"][0]]))
+                results_text.append("Matched Contacts (Semantic):\n" + "\n".join([f"  - {doc}" for doc in res["documents"][0]]))
         except Exception:
             pass
             
