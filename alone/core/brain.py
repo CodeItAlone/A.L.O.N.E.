@@ -101,8 +101,8 @@ class Brain:
             if not model_exists:
                 if model_name == "alone-model":
                     print("[!] Custom model 'alone-model' not found. Self-healing/compilation triggered...")
-                    # 1. Check if base model llama3.2:3b exists
-                    base_model = "llama3.2:3b"
+                    # 1. Check if base model qwen2.5:7b exists
+                    base_model = "qwen2.5:7b"
                     base_exists = False
                     for m in response.models:
                         if m.model == base_model or m.model == f"{base_model}:latest":
@@ -120,7 +120,7 @@ class Brain:
                             modelfile_path = "../Modelfile"
                         else:
                             with open(modelfile_path, "w") as f:
-                                f.write("FROM llama3.2:3b\nPARAMETER num_gpu 20\nPARAMETER num_thread 6\n")
+                                f.write("FROM qwen2.5:7b\nPARAMETER num_gpu 20\nPARAMETER num_thread 6\n")
                     
                     # 3. Create the model
                     print("[*] Creating local model 'alone-model' from Modelfile...")
@@ -145,8 +145,16 @@ class Brain:
             exit(1)
 
     def chat(self, user_message):
+        from core.context_manager import context_manager
+        
+        # Clean inputs of debug traces and logs
+        user_message = context_manager.clean_message_content(user_message)
+        
         # Append user message to history
         self.history.append(HumanMessage(content=user_message))
+        
+        # Check and handle summarization when history exceeds 10,000 tokens
+        self.history, summary_text = context_manager.summarize_and_trim(self.client, self.history)
         
         # Trim history if it exceeds max_history (keep last N messages)
         if len(self.history) > self.max_history:
@@ -155,11 +163,13 @@ class Brain:
         # Retrieve context from past sessions using ChromaDB semantic search
         from core import memory
         past_context = memory.retrieve_context(user_message, top_k=3)
+        past_context = context_manager.clean_message_content(past_context)
         
         # Retrieve structured human memory context (profile, projects, goals, relationships)
         try:
             from core.human_memory import service as human_memory_service
             structured_context = human_memory_service.get_active_context_summary()
+            structured_context = context_manager.clean_message_content(structured_context)
         except Exception as ex:
             print(f"[Brain Warning] Failed to import/retrieve structured memory: {ex}")
             structured_context = ""
@@ -168,6 +178,7 @@ class Brain:
         try:
             from core.preferences_service import preference_service
             preferences_context = preference_service.get_formatted_context()
+            preferences_context = context_manager.clean_message_content(preferences_context)
         except Exception as ex:
             print(f"[Brain Warning] Failed to retrieve user preferences: {ex}")
             preferences_context = ""
@@ -180,12 +191,17 @@ class Brain:
         if past_context:
             dynamic_system_prompt += f"\n\nRelevant context from past sessions:\n{past_context}"
         
+        dynamic_system_prompt = context_manager.clean_message_content(dynamic_system_prompt)
+        
+        # Enforce hard context limit (16,384 tokens) and monitor warning thresholds
+        self.history = context_manager.enforce_limits_and_warn(self.history, dynamic_system_prompt)
+        
         # Prepare messages for LLM (Dynamic System Prompt + History)
         messages = [SystemMessage(content=dynamic_system_prompt)] + self.history
         
         try:
             response = self.client.invoke(messages)
-            ai_content = response.content
+            ai_content = context_manager.clean_message_content(response.content)
             
             # Append AI response to history
             self.history.append(AIMessage(content=ai_content))
