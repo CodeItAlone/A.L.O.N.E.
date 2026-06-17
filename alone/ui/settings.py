@@ -188,7 +188,7 @@ class AloneSettingsWindow(QDialog):
         row1.addWidget(label1)
         
         self.model_combo = QComboBox(self)
-        self.model_combo.addItems(["llama3.1:8b", "mistral:7b", "codellama:7b", "llama3.1"])
+        self.model_combo.addItems(["qwen2.5:7b", "llama3.1:8b", "mistral:7b", "codellama:7b"])
         # Find and set current config model selection
         cur_model = self.config.get("model", "llama3.1:8b")
         idx = self.model_combo.findText(cur_model)
