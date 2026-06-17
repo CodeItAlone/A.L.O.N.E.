@@ -1,4 +1,4 @@
-FROM llama3.2:3b
+FROM qwen2.5:7b
 PARAMETER num_gpu 20
 PARAMETER num_thread 6
 SYSTEM "You are A.L.O.N.E., a highly intelligent AI assistant. Be concise. Address user as Sir."
