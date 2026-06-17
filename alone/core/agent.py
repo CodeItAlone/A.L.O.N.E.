@@ -627,6 +627,73 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def handle_relationship_intents(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.human_memory.relationship_controller import relationship_controller
+
+        # 1. Check list/show requests
+        list_match = re.search(
+            r"(?:show|list|who\s+are)\s+(?:my\s+)?(friends|colleagues|teammates|clients|relationships|contacts)",
+            cleaned_input
+        )
+        if list_match:
+            rel_type = list_match.group(1).upper()
+            mapping = {
+                "FRIENDS": "FRIEND",
+                "COLLEAGUES": "COLLEAGUE",
+                "TEAMMATES": "TEAMMATE",
+                "CLIENTS": "CLIENT"
+            }
+            mapped_type = mapping.get(rel_type, None)
+            
+            res = relationship_controller.get_relationships(relationship_type=mapped_type)
+            if not res["success"] or not res["relationships"]:
+                return f"Sir, you have no recorded contacts of type {rel_type.lower()}."
+            
+            lines = []
+            for r in res["relationships"]:
+                desc_part = f" | Description: {r['description']}" if r.get('description') else ""
+                pref_part = f" | Preferences: {r['preferences']}" if r.get('preferences') else ""
+                note_part = f" | Notes: {r['notes']}" if r.get('notes') else ""
+                lines.append(f"- **{r['name']}** ({r['relationshipType'].lower()}){desc_part}{pref_part}{note_part}")
+            return f"Sir, here are your {rel_type.lower()}:\n\n" + "\n".join(lines)
+
+        # 2. Check "who is <name>" or "tell me about <name>"
+        who_match = re.search(
+            r"(?:who\s+is|tell\s+me\s+about)\s+(?:my\s+)?([a-zA-Z\s]+)",
+            cleaned_input
+        )
+        if who_match:
+            name = who_match.group(1).strip()
+            from core.human_memory.relationship_repository import relationship_repository
+            rel = relationship_repository.find_by_name(name)
+            if rel:
+                desc_part = f" | Description: {rel.description}" if rel.description else ""
+                pref_part = f" | Preferences: {rel.preferences}" if rel.preferences else ""
+                note_part = f" | Notes: {rel.notes}" if rel.notes else ""
+                return f"Sir, {rel.name} is your {rel.relationship_type.lower()}{desc_part}{pref_part}{note_part}."
+            
+            res = relationship_controller.search_relationships(name)
+            if res["success"] and res["relationships"]:
+                lines = []
+                for r in res["relationships"]:
+                    desc_part = f" | Description: {r['description']}" if r.get('description') else ""
+                    pref_part = f" | Preferences: {r['preferences']}" if r.get('preferences') else ""
+                    note_part = f" | Notes: {r['notes']}" if r.get('notes') else ""
+                    lines.append(f"- **{r['name']}** ({r['relationshipType'].lower()}){desc_part}{pref_part}{note_part}")
+                return "Sir, I found the following matches:\n\n" + "\n".join(lines)
+
+        # 3. Handle saving/updating relationships
+        res = relationship_controller.process_natural_language_relationship(self.llm, raw_input)
+        if res["success"]:
+            r = res["relationship"]
+            desc_part = f", description: {r['description']}" if r.get('description') else ""
+            pref_part = f", preferences: {r['preferences']}" if r.get('preferences') else ""
+            note_part = f", notes: {r['notes']}" if r.get('notes') else ""
+            return f"Understood, Sir. I have recorded that {r['name']} is your {r['relationshipType'].lower()}{desc_part}{pref_part}{note_part}."
+
+        return None
+
     def heuristics_classify(self, user_input: str) -> str:
         import re
         cleaned_input = user_input.strip().lower()
@@ -675,6 +742,25 @@ Thought:{agent_scratchpad}"""
             if re.search(pat, cleaned_input):
                 return "USER_PROFILE_UPDATE"
                 
+        # RELATIONSHIP_INTENT
+        rel_keywords = ["friend", "brother", "sister", "mother", "father", "mentor", "partner", "professor", "teammate", "colleague", "client", "relationship", "contact"]
+        if cleaned_input.startswith("who is ") or cleaned_input.startswith("who is my "):
+            return "RELATIONSHIP_INTENT"
+        
+        list_rel_patterns = [
+            r"^(?:show|list|who\s+are)\s+(?:my\s+)?(?:friends|colleagues|relationships|contacts|teammates|clients)",
+            r"^friend\s+list",
+            r"^contact\s+list"
+        ]
+        for pat in list_rel_patterns:
+            if re.search(pat, cleaned_input):
+                return "RELATIONSHIP_INTENT"
+                
+        for kw in rel_keywords:
+            if kw in cleaned_input:
+                if "remember" in cleaned_input or "is my" in cleaned_input or "works" in cleaned_input or "likes" in cleaned_input or "hobbies" in cleaned_input or "prefer" in cleaned_input:
+                    return "RELATIONSHIP_INTENT"
+
         # 2. MEMORY_STORE
         store_patterns = [
             r"^(?:alone\s+)?remember\s+that\s+",
@@ -751,6 +837,7 @@ Thought:{agent_scratchpad}"""
             "Classify the user's input into exactly one of these categories:\n"
             "- USER_PROFILE_UPDATE (stating user's name, education, job, role, age, what they study, profession, or general personal profile update)\n"
             "- GOAL_INTENT (creating, listing, deleting, updating, or linking goals/milestones)\n"
+            "- RELATIONSHIP_INTENT (creating, listing, deleting, updating, or retrieving details about contacts, relationships, family members, friends, colleagues, teammates, mentors, or other people)\n"
             "- MEMORY_STORE (saving system preferences, code editors, file/project paths)\n"
             "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
             "- GENERAL_CHAT (greetings, casual talk, questions about who ALONE is)\n"
@@ -768,7 +855,7 @@ Thought:{agent_scratchpad}"""
         try:
             response = self.llm.invoke(messages)
             res_text = response.content.upper().strip()
-            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "RELATIONSHIP_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
                 if cat in res_text:
                     return cat
         except Exception as e:
@@ -807,6 +894,7 @@ Thought:{agent_scratchpad}"""
         prefs_str = ", ".join([f"{k}: {v}" for k, v in all_prefs.items()]) if all_prefs else "None"
         projects_str = ", ".join([p["name"] for p in projects]) if projects else "None"
         goals_str = ", ".join([g["title"] for g in goals]) if goals else "None"
+        relationships_str = ", ".join([f"{r['name']} ({r['relation_type']})" for r in relationships]) if relationships else "None"
         
         # Semantic search
         semantic_matches = human_memory_service.search_human_memory(query)
@@ -816,6 +904,7 @@ Thought:{agent_scratchpad}"""
             f"User Preferences: {prefs_str}\n"
             f"Projects: {projects_str}\n"
             f"Goals: {goals_str}\n"
+            f"Contacts: {relationships_str}\n"
         )
         if semantic_matches:
             context += f"\n{semantic_matches}"
@@ -895,6 +984,12 @@ Thought:{agent_scratchpad}"""
                 goal_res = self.handle_goal_intents(cleaned_input, user_input)
                 if goal_res is not None:
                     return goal_res
+
+            # --- RELATIONSHIP_INTENT DIRECT ROUTING ---
+            if intent == "RELATIONSHIP_INTENT":
+                rel_res = self.handle_relationship_intents(cleaned_input, user_input)
+                if rel_res is not None:
+                    return rel_res
 
             # --- MEMORY RETRIEVE DIRECT ROUTING ---
             if intent == "MEMORY_RETRIEVE":
