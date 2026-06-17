@@ -838,11 +838,19 @@ Thought:{agent_scratchpad}"""
 
     def run(self, user_input):
         try:
+            from core.context_manager import context_manager
+            
+            # Clean input of debug traces or raw logs
+            user_input = context_manager.clean_message_content(user_input)
+            cleaned_input = user_input.strip().lower()
+            
+            # Intercept context report command
+            if cleaned_input in ["context report", "show context report", "show token usage", "token usage report"]:
+                return context_manager.get_context_report()
+            
             # Set the latest query for tool safety boundaries
             from tools import set_latest_query
             set_latest_query(user_input)
-            
-            cleaned_input = user_input.strip().lower()
             
             # --- INTENT CLASSIFICATION ---
             intent = self.determine_intent(user_input)
@@ -1018,6 +1026,22 @@ Thought:{agent_scratchpad}"""
             if context_blocks:
                 final_input = "\n\n".join(context_blocks) + f"\n\nUser Request: {user_input}"
                 
+            # Clean context input
+            final_input = context_manager.clean_message_content(final_input)
+            
+            # Clean and enforce context window limit on agent memory
+            if hasattr(self, "memory") and self.memory is not None:
+                cleaned_messages = []
+                for msg in self.memory.chat_memory.messages:
+                    msg.content = context_manager.clean_message_content(msg.content)
+                    cleaned_messages.append(msg)
+                
+                # Enforce limits and monitor warning threshold
+                prompt_template = self.prompt.template if hasattr(self, "prompt") and self.prompt else ""
+                self.memory.chat_memory.messages = context_manager.enforce_limits_and_warn(
+                    cleaned_messages, prompt_template + "\n\nQuestion: " + final_input
+                )
+
             # Safety checks before invoking the agent/tools
             from core.safety import FollowUpValidationService
             if not FollowUpValidationService.verify_tool_execution(user_input):
