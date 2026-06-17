@@ -84,17 +84,32 @@ def retrieve_context(query: str, top_k: int = 3) -> str:
         )
         
         if not results or not results["documents"] or not results["documents"][0]:
+            from core.context_manager import context_manager
+            context_manager.log_retrieval(query, 0)
             return ""
             
         formatted_memories = []
         documents = results["documents"][0]
         metadatas = results["metadatas"][0]
         
-        for doc, meta in zip(documents, metadatas):
-            role = meta.get("role", "user")
-            date = meta.get("date", "Unknown Date")
-            formatted_memories.append(f"[{date}] {role.capitalize()}: {doc}")
-            
+        distances_list = results.get("distances")
+        if not distances_list or not distances_list[0]:
+            distances = [0.0] * len(documents)
+        else:
+            distances = distances_list[0]
+        
+        from core.context_manager import context_manager
+        
+        valid_count = 0
+        for doc, meta, dist in zip(documents, metadatas, distances):
+            # ChromaDB L2 distance: smaller is more similar. Under 1.2 is considered relevant.
+            if dist < 1.2:
+                role = meta.get("role", "user")
+                date = meta.get("date", "Unknown Date")
+                formatted_memories.append(f"[{date}] {role.capitalize()}: {doc}")
+                valid_count += 1
+                
+        context_manager.log_retrieval(query, valid_count)
         return "\n".join(formatted_memories)
     except Exception as e:
         print(f"[Memory Warning] Context retrieval failed: {e}")
