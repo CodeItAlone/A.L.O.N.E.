@@ -519,26 +519,8 @@ Thought:{agent_scratchpad}"""
                 prog_str = f" | Progress: {g['progress']}%"
                 lines.append(f"- **{g['title']}** (ID: {g['id']}, Status: {g['status']}){prog_str}{cat_str}{prio_str}{target_str}")
             return "Sir, here are your current goals:\n\n" + "\n".join(lines)
-            
-        # 2. Goal Creation Intent (using the natural language extraction pipeline)
-        create_pattern = r"(?:alone\s+)?(?:create|start|new|add)\s+goal\s+(.+)"
-        create_match = re.match(create_pattern, raw_input, re.IGNORECASE)
-        if create_match:
-            res = goal_controller.process_natural_language_goal(self.llm, raw_input)
-            if not res["success"]:
-                title = create_match.group(1).strip()
-                res = goal_controller.create_goal(title=title)
-                if not res["success"]:
-                    return f"Sir, I failed to create the goal: {res.get('error')}."
-            
-            g = res["goal"]
-            cat_part = f", category: {g['category']}" if g['category'] else ""
-            prio_part = f", priority: {g['priority']}" if g['priority'] else ""
-            target_part = f", target date: {g['targetDate']}" if g['targetDate'] else ""
-            proj_part = f", linked to project IDs: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
-            return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']}){cat_part}{prio_part}{target_part}{proj_part}."
 
-        # 3. Goal Deletion Intent
+        # 2. Goal Deletion Intent
         delete_match = re.search(
             r"(?:alone\s+)?delete\s+goal\s+([a-zA-Z0-9_\-\.\s]+)",
             raw_input,
@@ -558,7 +540,7 @@ Thought:{agent_scratchpad}"""
             goal_controller.delete_goal(found_goal["id"])
             return f"Understood, Sir. I have deleted the goal '{found_goal['title']}'."
 
-        # 4. Goal Update/Progress/Linking Intent
+        # 3. Goal Update/Progress/Linking Intent
         link_match = re.search(
             r"(?:alone\s+)?link\s+goal\s+([a-zA-Z0-9_\-\.\s]+?)\s+to\s+project\s+(.+)",
             raw_input,
@@ -621,6 +603,27 @@ Thought:{agent_scratchpad}"""
                 return f"Sir, I failed to update the goal: {update_res.get('error')}."
             display_field = "description" if field == "desc" else field
             return f"Understood, Sir. I have updated the goal '{found_goal['title']}' {display_field}."
+
+        # 4. Goal Creation Intent (using the natural language extraction pipeline)
+        # Attempt to process using the natural language goal extractor first
+        res = goal_controller.process_natural_language_goal(self.llm, raw_input)
+        if res["success"]:
+            g = res["goal"]
+            cat_part = f", category: {g['category']}" if g['category'] else ""
+            prio_part = f", priority: {g['priority']}" if g['priority'] else ""
+            target_part = f", target date: {g['targetDate']}" if g['targetDate'] else ""
+            proj_part = f", linked to project IDs: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
+            return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']}){cat_part}{prio_part}{target_part}{proj_part}."
+        
+        # Regex fallback for explicit goal commands if LLM extraction failed
+        create_pattern = r"(?:alone\s+)?(?:create|start|new|add)\s+goal\s+(.+)"
+        create_match = re.match(create_pattern, raw_input, re.IGNORECASE)
+        if create_match:
+            title = create_match.group(1).strip()
+            res = goal_controller.create_goal(title=title)
+            if res["success"]:
+                g = res["goal"]
+                return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']})."
 
         return None
 
