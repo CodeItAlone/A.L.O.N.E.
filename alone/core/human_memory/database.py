@@ -78,9 +78,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS relationships (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
-            relation_type TEXT CHECK(relation_type IN ('colleague', 'friend', 'client', 'family', 'other')) DEFAULT 'other',
+            relation_type TEXT DEFAULT 'other',
             contact_info TEXT,
+            description TEXT,
+            preferences TEXT,
             notes TEXT,
+            importance_score INTEGER DEFAULT 20,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -114,6 +117,33 @@ def init_db():
             cursor.execute("ALTER TABLE goals ADD COLUMN priority TEXT DEFAULT ''")
         if "progress" not in goal_columns:
             cursor.execute("ALTER TABLE goals ADD COLUMN progress INTEGER DEFAULT 0")
+
+        # Migrate relationships table to drop CHECK constraint and add new columns
+        cursor.execute("PRAGMA table_info(relationships)")
+        rel_columns = [row["name"] for row in cursor.fetchall()]
+        if rel_columns and ("description" not in rel_columns or "preferences" not in rel_columns or "importance_score" not in rel_columns):
+            # Drop old CHECK constraint by recreating table
+            cursor.execute("ALTER TABLE relationships RENAME TO temp_relationships")
+            cursor.execute("""
+            CREATE TABLE relationships (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                relation_type TEXT DEFAULT 'other',
+                contact_info TEXT,
+                description TEXT,
+                preferences TEXT,
+                notes TEXT,
+                importance_score INTEGER DEFAULT 20,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            # Copy data from temp_relationships
+            cursor.execute("""
+            INSERT INTO relationships (id, name, relation_type, contact_info, notes, created_at, updated_at)
+            SELECT id, name, relation_type, contact_info, notes, created_at, updated_at FROM temp_relationships
+            """)
+            cursor.execute("DROP TABLE temp_relationships")
 
         conn.commit()
         conn.close()
@@ -323,38 +353,58 @@ def delete_goal(goal_id):
         cursor.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
         conn.commit()
         conn.close()
-
 # --- Relationships CRUD ---
 def get_relationships():
+    print(f"[RELATIONSHIP RETRIEVAL] Database Path: {DB_PATH}")
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, relation_type, contact_info, notes, created_at, updated_at FROM relationships")
+        cursor.execute("SELECT id, name, relation_type, contact_info, description, preferences, notes, importance_score, created_at, updated_at FROM relationships")
         rows = cursor.fetchall()
         conn.close()
         return [dict(row) for row in rows]
 
-def add_relationship(rel_id, name, relation_type, contact_info, notes):
+def add_relationship(rel_id, name, relation_type, contact_info=None, notes=None, description=None, preferences=None, importance_score=20):
+    print(f"[RELATIONSHIP SAVE] Database Path: {DB_PATH}")
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
-        INSERT INTO relationships (id, name, relation_type, contact_info, notes, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (rel_id, name, relation_type, contact_info, notes, now, now))
+        INSERT INTO relationships (id, name, relation_type, contact_info, description, preferences, notes, importance_score, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (rel_id, name, relation_type, contact_info, description, preferences, notes, importance_score, now, now))
         conn.commit()
         conn.close()
         print(f"[MEMORY SAVE] contact='{name}', id='{rel_id}'")
 
-def update_relationship(rel_id, name, relation_type, contact_info, notes):
+def update_relationship(rel_id, name, relation_type, contact_info=None, notes=None, description=None, preferences=None, importance_score=None):
+    print(f"[RELATIONSHIP UPDATE] Database Path: {DB_PATH}")
     with db_lock:
         conn = get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-        UPDATE relationships SET name = ?, relation_type = ?, contact_info = ?, notes = ?, updated_at = ? WHERE id = ?
-        """, (name, relation_type, contact_info, notes, now, rel_id))
+        
+        query = "UPDATE relationships SET name = ?, relation_type = ?, notes = ?, updated_at = ?"
+        params = [name, relation_type, notes, now]
+        
+        if contact_info is not None:
+            query += ", contact_info = ?"
+            params.append(contact_info)
+        if description is not None:
+            query += ", description = ?"
+            params.append(description)
+        if preferences is not None:
+            query += ", preferences = ?"
+            params.append(preferences)
+        if importance_score is not None:
+            query += ", importance_score = ?"
+            params.append(importance_score)
+            
+        query += " WHERE id = ?"
+        params.append(rel_id)
+        
+        cursor.execute(query, tuple(params))
         conn.commit()
         conn.close()
         print(f"[MEMORY UPDATE] contact='{name}', id='{rel_id}'")
