@@ -22,7 +22,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         query_params = urllib.parse.parse_qs(parsed_url.query)
 
         # 1. UI Routes
-        if path in ["/memory", "/memory/", "/memory/explorer", "/memory/goals", "/memory/relationships", "/memory/profile", "/memory/preferences", "/memory/projects", "/memory/tasks"]:
+        if path in ["/memory", "/memory/", "/memory/explorer", "/memory/goals", "/memory/relationships", "/memory/profile", "/memory/preferences", "/memory/projects", "/memory/tasks", "/memory/calendar"]:
             self.serve_html()
             return
 
@@ -39,6 +39,11 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # 4. API: GET /api/tasks
         if path == "/api/tasks":
             self.handle_get_tasks()
+            return
+
+        # 5. API: GET /api/calendar
+        if path == "/api/calendar":
+            self.handle_get_calendar()
             return
 
         # Fallback
@@ -59,6 +64,11 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # POST /api/tasks
         if path == "/api/tasks":
             self.handle_create_task(body)
+            return
+
+        # POST /api/calendar
+        if path == "/api/calendar":
+            self.handle_create_calendar(body)
             return
 
         # POST /api/memory/restore/{type}/{id}
@@ -99,6 +109,14 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.handle_update_task(t_id, body)
                 return
 
+        # PUT /api/calendar/{id}
+        if path.startswith("/api/calendar/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                c_id = parts[3]
+                self.handle_update_calendar(c_id, body)
+                return
+
         # PUT /api/memory/{type}/{id}
         if path.startswith("/api/memory/"):
             parts = path.split("/")
@@ -120,6 +138,14 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             if len(parts) >= 4:
                 t_id = parts[3]
                 self.handle_delete_task(t_id)
+                return
+
+        # DELETE /api/calendar/{id}
+        if path.startswith("/api/calendar/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                c_id = parts[3]
+                self.handle_delete_calendar(c_id)
                 return
 
         # DELETE /api/memory/{type}/{id}
@@ -162,6 +188,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             relationships = database.get_relationships(include_deleted=True)
             projects = database.get_projects(include_deleted=True)
             tasks = database.get_tasks()
+            calendar_events = database.get_calendar_events()
 
             # Change log
             with database.db_lock:
@@ -176,7 +203,8 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             active_rels = sum(1 for r in relationships if r.get("is_deleted") == 0)
             active_projs = sum(1 for p in projects if p.get("is_deleted") == 0)
             active_tasks = len(tasks)
-            total_active = len(identity_data) + len(preferences_data) + active_goals + active_rels + active_projs + active_tasks
+            active_cal = len(calendar_events)
+            total_active = len(identity_data) + len(preferences_data) + active_goals + active_rels + active_projs + active_tasks + active_cal
 
             # Most active memory type based on logs
             type_counts = {}
@@ -193,6 +221,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "relationships_count": active_rels,
                 "projects_count": active_projs,
                 "tasks_count": active_tasks,
+                "calendar_count": active_cal,
                 "identity_count": len(identity_data),
                 "preferences_count": len(preferences_data),
                 "most_active_type": most_active,
@@ -206,6 +235,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "relationships": relationships,
                 "projects": projects,
                 "tasks": tasks,
+                "calendar": calendar_events,
                 "change_log": change_log,
                 "stats": stats
             })
@@ -255,6 +285,76 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         try:
             database.delete_task(t_id)
             self.send_json({"success": True})
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
+
+    def handle_get_calendar(self):
+        try:
+            events = database.get_calendar_events()
+            self.send_json(events)
+        except Exception as e:
+            self.send_json({"error": str(e)}, 500)
+
+    def handle_create_calendar(self, body):
+        from core.human_memory.calendar_controller import calendar_controller
+        try:
+            title = body.get("title")
+            start = body.get("start_time") or body.get("startTime")
+            end = body.get("end_time") or body.get("endTime")
+            desc = body.get("description", "")
+            location = body.get("location", "")
+            attendees = body.get("attendees", [])
+            event_type = body.get("event_type") or body.get("eventType", "meeting")
+            status = body.get("status", "scheduled")
+            force = body.get("force", False)
+            
+            res = calendar_controller.create_event(
+                title=title,
+                start_time=start,
+                end_time=end,
+                description=desc,
+                location=location,
+                attendees=attendees,
+                event_type=event_type,
+                status=status,
+                force=force
+            )
+            self.send_json(res)
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
+
+    def handle_update_calendar(self, c_id, body):
+        from core.human_memory.calendar_controller import calendar_controller
+        try:
+            title = body.get("title")
+            start = body.get("start_time") or body.get("startTime")
+            end = body.get("end_time") or body.get("endTime")
+            desc = body.get("description", "")
+            location = body.get("location", "")
+            attendees = body.get("attendees", [])
+            event_type = body.get("event_type") or body.get("eventType", "meeting")
+            status = body.get("status", "scheduled")
+            
+            res = calendar_controller.update_event(
+                event_id=c_id,
+                title=title,
+                start_time=start,
+                end_time=end,
+                description=desc,
+                location=location,
+                attendees=attendees,
+                event_type=event_type,
+                status=status
+            )
+            self.send_json(res)
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
+
+    def handle_delete_calendar(self, c_id):
+        from core.human_memory.calendar_controller import calendar_controller
+        try:
+            res = calendar_controller.delete_event(c_id)
+            self.send_json(res)
         except Exception as e:
             self.send_json({"success": False, "error": str(e)}, 500)
 
