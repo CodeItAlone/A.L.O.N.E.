@@ -123,12 +123,14 @@ class AloneMemoryWindow(QDialog):
         self.projects_tab = self.create_projects_tab()
         self.goals_tab = self.create_goals_tab()
         self.relationships_tab = self.create_relationships_tab()
+        self.tasks_tab = self.create_tasks_tab()
 
         self.tabs.addTab(self.profile_tab, "User Profile")
         self.tabs.addTab(self.preferences_tab, "Preferences")
         self.tabs.addTab(self.projects_tab, "Projects")
         self.tabs.addTab(self.goals_tab, "Goals")
         self.tabs.addTab(self.relationships_tab, "Relationships")
+        self.tabs.addTab(self.tasks_tab, "Tasks")
 
         layout.addWidget(self.tabs)
 
@@ -148,6 +150,7 @@ class AloneMemoryWindow(QDialog):
         self.load_projects_data()
         self.load_goals_data()
         self.load_relationships_data()
+        self.load_tasks_data()
 
     # --- KEY-VALUE TABS CREATOR (PROFILE & PREFERENCES) ---
     def create_key_value_tab(self, is_preferences):
@@ -600,6 +603,147 @@ class AloneMemoryWindow(QDialog):
         self.rel_name_input.clear()
         self.rel_notes_input.clear()
         self.rel_contact_input.clear()
+
+    # --- TASKS TAB CREATOR ---
+    def create_tasks_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Tasks Table
+        self.tasks_table = QTableWidget(0, 8)
+        self.tasks_table.setHorizontalHeaderLabels(["ID", "Title", "Description", "Priority", "Status", "Due Date", "Project ID", "Goal ID"])
+        self.tasks_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.tasks_table)
+
+        # Form Controls
+        form = QVBoxLayout()
+        row1 = QHBoxLayout()
+        self.task_title_input = QLineEdit()
+        self.task_title_input.setPlaceholderText("Task Title")
+        self.task_priority_combo = QComboBox()
+        self.task_priority_combo.addItems(["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+        self.task_priority_combo.setCurrentText("MEDIUM")
+        self.task_status_combo = QComboBox()
+        self.task_status_combo.addItems(["PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED"])
+        self.task_status_combo.setCurrentText("PENDING")
+        self.task_due_input = QLineEdit()
+        self.task_due_input.setPlaceholderText("Due Date (e.g. YYYY-MM-DD)")
+        
+        row1.addWidget(self.task_title_input)
+        row1.addWidget(self.task_priority_combo)
+        row1.addWidget(self.task_status_combo)
+        row1.addWidget(self.task_due_input)
+        form.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.task_project_input = QLineEdit()
+        self.task_project_input.setPlaceholderText("Linked Project ID (Optional)")
+        self.task_goal_input = QLineEdit()
+        self.task_goal_input.setPlaceholderText("Linked Goal ID (Optional)")
+        row2.addWidget(self.task_project_input)
+        row2.addWidget(self.task_goal_input)
+        form.addLayout(row2)
+
+        self.task_desc_input = QTextEdit()
+        self.task_desc_input.setPlaceholderText("Description/Sub-tasks...")
+        self.task_desc_input.setFixedHeight(50)
+        form.addWidget(self.task_desc_input)
+
+        # Action Buttons
+        actions = QHBoxLayout()
+        self.task_id_label = QLabel("New Task (Auto-ID)")
+        self.task_id_label.setStyleSheet("color: rgba(255,255,255,100); font-size: 8pt;")
+        
+        save_btn = QPushButton("Save Task")
+        save_btn.clicked.connect(self.save_task)
+        del_btn = QPushButton("Delete Selected")
+        del_btn.setObjectName("delete_btn")
+        del_btn.clicked.connect(self.delete_task)
+
+        actions.addWidget(self.task_id_label)
+        actions.addStretch()
+        actions.addWidget(save_btn)
+        actions.addWidget(del_btn)
+        form.addLayout(actions)
+        layout.addLayout(form)
+
+        # Bind row selection
+        self.tasks_table.itemSelectionChanged.connect(self.autofill_task)
+
+        return tab
+
+    def autofill_task(self):
+        selected = self.tasks_table.selectedItems()
+        if len(selected) >= 8:
+            self.task_id_label.setText(selected[0].text())
+            self.task_title_input.setText(selected[1].text())
+            self.task_desc_input.setPlainText(selected[2].text())
+            self.task_priority_combo.setCurrentText(selected[3].text())
+            self.task_status_combo.setCurrentText(selected[4].text())
+            self.task_due_input.setText(selected[5].text())
+            self.task_project_input.setText(selected[6].text())
+            self.task_goal_input.setText(selected[7].text())
+
+    def load_tasks_data(self):
+        self.tasks_table.setRowCount(0)
+        tasks = database.get_tasks()
+        for row_idx, t in enumerate(tasks):
+            self.tasks_table.insertRow(row_idx)
+            self.tasks_table.setItem(row_idx, 0, QTableWidgetItem(t["id"]))
+            self.tasks_table.setItem(row_idx, 1, QTableWidgetItem(t["title"]))
+            self.tasks_table.setItem(row_idx, 2, QTableWidgetItem(t["description"] or ""))
+            self.tasks_table.setItem(row_idx, 3, QTableWidgetItem(t["priority"]))
+            self.tasks_table.setItem(row_idx, 4, QTableWidgetItem(t["status"]))
+            self.tasks_table.setItem(row_idx, 5, QTableWidgetItem(t["due_date"] or ""))
+            self.tasks_table.setItem(row_idx, 6, QTableWidgetItem(t["project_id"] or ""))
+            self.tasks_table.setItem(row_idx, 7, QTableWidgetItem(t["goal_id"] or ""))
+
+    def save_task(self):
+        task_id = self.task_id_label.text()
+        title = self.task_title_input.text().strip()
+        desc = self.task_desc_input.toPlainText().strip() or None
+        priority = self.task_priority_combo.currentText()
+        status = self.task_status_combo.currentText()
+        due = self.task_due_input.text().strip() or None
+        project = self.task_project_input.text().strip() or None
+        goal = self.task_goal_input.text().strip() or None
+
+        if not title:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a task title, Sir.")
+            return
+
+        if "New Task" in task_id:
+            task_id = str(uuid.uuid4())[:8]
+            database.add_task(task_id, title, desc, priority, status, due, project, goal)
+        else:
+            database.update_task(task_id, title, desc, priority, status, due, project, goal)
+
+        self.load_tasks_data()
+        
+        # Reset Inputs
+        self.task_id_label.setText("New Task (Auto-ID)")
+        self.task_title_input.clear()
+        self.task_desc_input.clear()
+        self.task_due_input.clear()
+        self.task_project_input.clear()
+        self.task_goal_input.clear()
+
+    def delete_task(self):
+        task_id = self.task_id_label.text()
+        if "New Task" in task_id:
+            QMessageBox.warning(self, "No Task Selected", "Please select a task to delete, Sir.")
+            return
+        database.delete_task(task_id)
+        self.load_tasks_data()
+        
+        # Reset Inputs
+        self.task_id_label.setText("New Task (Auto-ID)")
+        self.task_title_input.clear()
+        self.task_desc_input.clear()
+        self.task_due_input.clear()
+        self.task_project_input.clear()
+        self.task_goal_input.clear()
 
 if __name__ == "__main__":
     from PyQt5.QtWidgets import QApplication
