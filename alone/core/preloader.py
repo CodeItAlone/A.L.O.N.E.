@@ -6,6 +6,7 @@ import sys
 
 _ready = threading.Event()
 _whisper_model = None
+_stt_provider = None
 
 # Ensure project root is in path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +17,7 @@ with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 
 def prewarm():
-    global _whisper_model
+    global _whisper_model, _stt_provider
     print("[ALONE] Pre-warming all systems...")
 
     # Start Memory Web Server
