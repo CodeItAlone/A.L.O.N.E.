@@ -196,6 +196,7 @@ class AloneAgent:
         
         # Initialize Memory
         self.memory = ConversationBufferMemory(memory_key="chat_history")
+        self.pending_calendar_action = None
         
         template = """You are A.L.O.N.E., a highly intelligent, witty, and efficient AI personal assistant. 
 You always address the user as 'Sir'. 
@@ -788,6 +789,131 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def handle_calendar_intents(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.human_memory.calendar_controller import calendar_controller
+        from core.human_memory.calendar_service import calendar_service
+        from datetime import datetime, timezone
+        
+        # Helper to format ISO to local time display
+        def format_to_local_display(utc_iso_str):
+            try:
+                clean_str = utc_iso_str.replace("Z", "")
+                dt = datetime.fromisoformat(clean_str).replace(tzinfo=timezone.utc)
+                local_dt = dt.astimezone()
+                return local_dt.strftime("%Y-%m-%d %I:%M %p")
+            except Exception:
+                return utc_iso_str
+        
+        # 1. List / Query Schedule
+        list_phrases = [
+            "list events", "list my events", "show events", "show my events",
+            "what's my schedule", "what is my schedule", "show schedule", "list meetings", "show meetings",
+            "what is my schedule?", "what's my schedule?", "query schedule", "my schedule"
+        ]
+        if cleaned_input in list_phrases or "list events" in cleaned_input or "show schedule" in cleaned_input:
+            res = calendar_controller.get_events()
+            if not res["success"] or not res["events"]:
+                return "Sir, you have no events scheduled at this time."
+            lines = []
+            active_events = [e for e in res["events"] if e["status"] == "scheduled"]
+            if not active_events:
+                return "Sir, you have no events scheduled at this time."
+            for e in active_events:
+                start_disp = format_to_local_display(e["startTime"])
+                end_disp = format_to_local_display(e["endTime"])
+                loc_str = f" at {e['location']}" if e['location'] else ""
+                type_str = f" [{e['eventType'].title()}]" if e['eventType'] else ""
+                lines.append(f"- **{e['title']}**{type_str}: {start_disp} to {end_disp}{loc_str}")
+            return "Sir, here are your scheduled events:\n\n" + "\n".join(lines)
+            
+        # 2. Reschedule Event
+        resched_match = re.search(
+            r"(?:alone\s+)?reschedule\s+(?:event|meeting)\s+(.+?)\s+to\s+(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if resched_match:
+            ident = resched_match.group(1).strip()
+            new_time_str = resched_match.group(2).strip()
+            
+            res = calendar_controller.get_events()
+            found_event = None
+            if res["success"]:
+                for e in res["events"]:
+                    if e["id"].lower() == ident.lower() or e["title"].lower().strip() == ident.lower().strip():
+                        found_event = e
+                        break
+            if not found_event:
+                return f"Sir, I could not find an event with ID or title '{ident}'."
+                
+            try:
+                new_start = calendar_service.parse_to_utc_iso(new_time_str)
+                dt = datetime.fromisoformat(new_start.replace("Z", ""))
+                end_dt = dt.replace(hour=dt.hour + 1) if dt.hour < 23 else dt
+                new_end = end_dt.isoformat() + "Z"
+            except Exception as parse_err:
+                return f"Sir, I could not understand the new time: {parse_err}."
+                
+            resched_res = calendar_service.reschedule_event(found_event["id"], new_start, new_end, force=False)
+            if not resched_res["success"]:
+                if resched_res.get("conflict"):
+                    self.pending_calendar_action = {
+                        "type": "reschedule",
+                        "event_id": found_event["id"],
+                        "title": found_event["title"],
+                        "start_time": new_start,
+                        "end_time": new_end
+                    }
+                    conflicts_str = ", ".join([c["title"] for c in resched_res["conflicting_events"]])
+                    return f"Sir, that time conflicts with: {conflicts_str}. Would you like me to schedule it anyway?"
+                return f"Sir, I failed to reschedule the event: {resched_res.get('error')}."
+            return f"Sir, I have rescheduled '{found_event['title']}' to {format_to_local_display(new_start)}."
+
+        # 3. Delete / Cancel Event
+        delete_match = re.search(
+            r"(?:alone\s+)?(?:delete|cancel)\s+(?:event|meeting)\s+(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if delete_match:
+            ident = delete_match.group(1).strip()
+            res = calendar_controller.get_events()
+            found_event = None
+            if res["success"]:
+                for e in res["events"]:
+                    if e["id"].lower() == ident.lower() or e["title"].lower().strip() == ident.lower().strip():
+                        found_event = e
+                        break
+            if not found_event:
+                return f"Sir, I could not find an event with ID or title '{ident}'."
+                
+            calendar_controller.delete_event(found_event["id"])
+            return f"Sir, I have cancelled the event '{found_event['title']}'."
+
+        # 4. Schedule / Create Event (Natural Language Extraction)
+        res = calendar_controller.process_natural_language_event(self.llm, raw_input, force=False)
+        if res["success"]:
+            e = res["event"]
+            start_disp = format_to_local_display(e["startTime"])
+            return f"Sir, I have scheduled the event '{e['title']}' for {start_disp}."
+        elif res.get("conflict"):
+            evt = res.get("event", {})
+            self.pending_calendar_action = {
+                "type": "create",
+                "title": evt.get("title") or "New Event",
+                "start_time": evt.get("startTime"),
+                "end_time": evt.get("endTime"),
+                "description": evt.get("description"),
+                "location": evt.get("location"),
+                "attendees": evt.get("attendees"),
+                "event_type": evt.get("eventType")
+            }
+            conflicts_str = ", ".join([c["title"] for c in res["conflicting_events"]])
+            return f"Sir, you already have a meeting: {conflicts_str}. Would you like me to schedule this anyway?"
+        else:
+            return f"Sir, I failed to schedule the event: {res.get('error')}."
+
     def heuristics_classify(self, user_input: str) -> str:
         import re
         cleaned_input = user_input.strip().lower()
@@ -834,6 +960,34 @@ Thought:{agent_scratchpad}"""
         for pat in task_patterns:
             if re.search(pat, cleaned_input):
                 return "TASK_INTENT"
+            
+        # CALENDAR_INTENT
+        calendar_patterns = [
+            r"\bschedule\s+(?:an\s+)?event\b",
+            r"\bschedule\s+(?:a\s+)?meeting\b",
+            r"\bcalendar\b",
+            r"\bmeeting\b",
+            r"\bevent\b",
+            r"\blist\s+(?:my\s+)?events\b",
+            r"\blist\s+(?:my\s+)?meetings\b",
+            r"\bshow\s+(?:my\s+)?events\b",
+            r"\bshow\s+(?:my\s+)?meetings\b",
+            r"\bdelete\s+event\b",
+            r"\bdelete\s+meeting\b",
+            r"\bcancel\s+event\b",
+            r"\bcancel\s+meeting\b",
+            r"\breschedule\s+event\b",
+            r"\breschedule\s+meeting\b",
+            r"\bupdate\s+event\b",
+            r"\bupdate\s+meeting\b",
+            r"\bquery\s+schedule\b",
+            r"\bwhat's\s+my\s+schedule\b",
+            r"\bwhat\s+is\s+my\s+schedule\b",
+            r"\bmy\s+schedule\b"
+        ]
+        for pat in calendar_patterns:
+            if re.search(pat, cleaned_input):
+                return "CALENDAR_INTENT"
             
         # USER_PROFILE_UPDATE
         profile_patterns = [
@@ -948,6 +1102,7 @@ Thought:{agent_scratchpad}"""
             "- GOAL_INTENT (creating, listing, deleting, updating, or linking goals/milestones)\n"
             "- TASK_INTENT (creating, listing, deleting, completing, or retrieving user tasks/to-do lists)\n"
             "- RELATIONSHIP_INTENT (creating, listing, deleting, updating, or retrieving details about contacts, relationships, family members, friends, colleagues, teammates, mentors, or other people)\n"
+            "- CALENDAR_INTENT (scheduling, listing, updating, deleting, cancelling, rescheduling, or querying calendar events/meetings/schedules)\n"
             "- MEMORY_STORE (saving system preferences, code editors, file/project paths)\n"
             "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
             "- GENERAL_CHAT (greetings, casual talk, questions about who ALONE is)\n"
@@ -965,7 +1120,7 @@ Thought:{agent_scratchpad}"""
         try:
             response = self.llm.invoke(messages)
             res_text = response.content.upper().strip()
-            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "TASK_INTENT", "RELATIONSHIP_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "TASK_INTENT", "RELATIONSHIP_INTENT", "CALENDAR_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
                 if cat in res_text:
                     return cat
         except Exception as e:
@@ -1036,6 +1191,44 @@ Thought:{agent_scratchpad}"""
             user_input = context_manager.clean_message_content(user_input)
             cleaned_input = user_input.strip().lower()
             
+            # Check confirmation if we have a pending calendar action
+            if hasattr(self, "pending_calendar_action") and self.pending_calendar_action:
+                confirm_phrases = ["yes", "yeah", "yep", "do it", "force", "confirm", "schedule it", "go ahead", "schedule it anyway", "yes please", "sure"]
+                if cleaned_input in confirm_phrases or any(w in cleaned_input for w in ["yes", "confirm", "force"]):
+                    action = self.pending_calendar_action
+                    self.pending_calendar_action = None
+                    
+                    if action["type"] == "create":
+                        from core.human_memory.calendar_controller import calendar_controller
+                        res = calendar_controller.create_event(
+                            title=action["title"],
+                            start_time=action["start_time"],
+                            end_time=action["end_time"],
+                            description=action.get("description"),
+                            location=action.get("location"),
+                            attendees=action.get("attendees"),
+                            event_type=action.get("event_type"),
+                            force=True
+                        )
+                        if res.get("success"):
+                            return f"Sir, I have scheduled the event '{action['title']}' despite the conflict."
+                        else:
+                            return f"Sir, I failed to schedule the event: {res.get('error')}."
+                    elif action["type"] == "reschedule":
+                        from core.human_memory.calendar_service import calendar_service
+                        res = calendar_service.reschedule_event(
+                            event_id=action["event_id"],
+                            start_time=action["start_time"],
+                            end_time=action["end_time"],
+                            force=True
+                        )
+                        if res.get("success"):
+                            return f"Sir, I have rescheduled the event '{action['title']}' despite the conflict."
+                        else:
+                            return f"Sir, I failed to reschedule the event: {res.get('error')}."
+                else:
+                    self.pending_calendar_action = None
+            
             # Intercept context report command
             if cleaned_input in ["context report", "show context report", "show token usage", "token usage report"]:
                 return context_manager.get_context_report()
@@ -1096,6 +1289,12 @@ Thought:{agent_scratchpad}"""
                 rel_res = self.handle_relationship_intents(cleaned_input, user_input)
                 if rel_res is not None:
                     return rel_res
+
+            # --- CALENDAR_INTENT DIRECT ROUTING ---
+            if intent == "CALENDAR_INTENT":
+                calendar_res = self.handle_calendar_intents(cleaned_input, user_input)
+                if calendar_res is not None:
+                    return calendar_res
 
             # --- MEMORY RETRIEVE DIRECT ROUTING ---
             if intent == "MEMORY_RETRIEVE":
