@@ -1,4 +1,10 @@
+import os
+import sys
 import uuid
+
+# Ensure the 'alone' folder is added to sys.path so 'core' can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (QDialog, QLabel, QVBoxLayout, QHBoxLayout, 
@@ -594,3 +600,11 @@ class AloneMemoryWindow(QDialog):
         self.rel_name_input.clear()
         self.rel_notes_input.clear()
         self.rel_contact_input.clear()
+
+if __name__ == "__main__":
+    from PyQt5.QtWidgets import QApplication
+    import sys
+    app = QApplication(sys.argv)
+    window = AloneMemoryWindow()
+    window.show()
+    sys.exit(app.exec_())
