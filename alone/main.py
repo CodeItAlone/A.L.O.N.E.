@@ -128,13 +128,14 @@ def handle_audio(audio_path, wake_word_detected=False, active_window_bypass=Fals
         # Check quick commands first
         from core.agent import QUICK_COMMANDS
         key = clean_text.lower().strip().rstrip("?.!")
-        if key not in QUICK_COMMANDS:
+        if key not in QUICK_COMMANDS and key not in ["stop", "cancel", "pause", "enough", "listen"]:
             # Only say "on it" for complex commands
             speak_async("On it, Sir.")
         
-        # Check for cancel/stop keywords
-        if clean_text.strip().lower() in ["stop", "cancel"]:
-            speak_async("Understood, Sir. Cancelling.")
+        # Check for cancel/stop/interrupt keywords
+        if clean_text.strip().lower() in ["stop", "cancel", "pause", "enough", "listen"]:
+            from core.speaker import stop_tts
+            stop_tts()
             return
         
         # Check for shutdown keywords
