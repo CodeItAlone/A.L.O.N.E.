@@ -168,6 +168,24 @@ def init_db():
                 if "is_deleted" not in rel_columns:
                     cursor.execute("ALTER TABLE relationships ADD COLUMN is_deleted INTEGER DEFAULT 0")
 
+            # 8. Tasks Table
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                priority TEXT DEFAULT 'MEDIUM',
+                status TEXT DEFAULT 'PENDING',
+                due_date TEXT,
+                project_id TEXT,
+                goal_id TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+                FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE SET NULL
+            );
+            """)
+
             conn.commit()
         finally:
             conn.close()
@@ -585,3 +603,95 @@ def delete_relationship(rel_id):
             conn.commit()
         finally:
             conn.close()
+
+# --- Tasks CRUD ---
+def get_tasks(status=None, priority=None):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            query = "SELECT id, title, description, priority, status, due_date, project_id, goal_id, created_at, updated_at FROM tasks WHERE 1=1"
+            params = []
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            if priority:
+                query += " AND priority = ?"
+                params.append(priority)
+            cursor.execute(query, tuple(params))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+def add_task(task_id, title, description, priority="MEDIUM", status="PENDING", due_date=None, project_id=None, goal_id=None):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+            INSERT INTO tasks (id, title, description, priority, status, due_date, project_id, goal_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (task_id, title, description, priority, status, due_date, project_id, goal_id, now, now))
+            # Log to change log
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+            """, ("task", task_id, "create", f"Title: {title}, Priority: {priority}, Status: {status}", now))
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[TASK CREATE] task='{title}', id='{task_id}'")
+
+def update_task(task_id, title, description, priority, status, due_date=None, project_id=None, goal_id=None):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Get original
+            cursor.execute("SELECT title, description, priority, status, due_date, project_id, goal_id FROM tasks WHERE id = ?", (task_id,))
+            orig_row = cursor.fetchone()
+            orig_val = dict(orig_row) if orig_row else None
+            
+            cursor.execute("""
+            UPDATE tasks
+            SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, project_id = ?, goal_id = ?, updated_at = ?
+            WHERE id = ?
+            """, (title, description, priority, status, due_date, project_id, goal_id, now, task_id))
+            
+            # Log to change log
+            new_val = f"Title: {title}, Priority: {priority}, Status: {status}, Due: {due_date}, Proj: {project_id}, Goal: {goal_id}"
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, original_value, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, ("task", task_id, "update", str(orig_val), new_val, now))
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[TASK UPDATE] task='{title}', id='{task_id}'")
+
+def delete_task(task_id):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("SELECT title, status FROM tasks WHERE id = ?", (task_id,))
+            orig_row = cursor.fetchone()
+            orig_val = dict(orig_row) if orig_row else None
+            
+            cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+            
+            # Log to change log
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, original_value, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, ("task", task_id, "delete", str(orig_val), "deleted", now))
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[TASK DELETE] id='{task_id}'")
