@@ -28,11 +28,14 @@ def set_state(new_state):
         if new_state == AssistantState.FOLLOW_UP:
             import time
             _follow_up_start_time = time.time()
-            print("[VOICE UX] Follow-up mode entered")
+            print("[VOICE UX]")
+            print("[FOLLOW-UP ENTERED]")
         elif old_state == AssistantState.FOLLOW_UP and new_state == AssistantState.IDLE:
-            print("[VOICE UX] Follow-up timeout")
+            print("[VOICE UX]")
+            print("[FOLLOW-UP TIMEOUT]")
         elif new_state == AssistantState.INTERRUPTED:
-            print("[VOICE UX] Interrupt detected")
+            print("[VOICE UX]")
+            print("[INTERRUPT DETECTED]")
             
     # Emit to GUI
     try:
