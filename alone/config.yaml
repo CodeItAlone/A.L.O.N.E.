@@ -13,6 +13,13 @@ voice:
   openwakeword_threshold: 0.5
   ptt_mode: false
 
+stt_provider: "whisper" # options: "whisper", "parakeet"
+
+parakeet:
+  model_name: "nvidia/parakeet-tdt-0.6b-v3"
+  device: "cpu" # options: cpu, cuda
+  fallback_to_whisper: true
+
 whisper:
   model_size: "base.en"
   device: "cpu"
