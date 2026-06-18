@@ -124,13 +124,15 @@ class AloneMemoryWindow(QDialog):
         self.goals_tab = self.create_goals_tab()
         self.relationships_tab = self.create_relationships_tab()
         self.tasks_tab = self.create_tasks_tab()
-
+        self.calendar_tab = self.create_calendar_tab()
+ 
         self.tabs.addTab(self.profile_tab, "User Profile")
         self.tabs.addTab(self.preferences_tab, "Preferences")
         self.tabs.addTab(self.projects_tab, "Projects")
         self.tabs.addTab(self.goals_tab, "Goals")
         self.tabs.addTab(self.relationships_tab, "Relationships")
         self.tabs.addTab(self.tasks_tab, "Tasks")
+        self.tabs.addTab(self.calendar_tab, "Calendar")
 
         layout.addWidget(self.tabs)
 
@@ -151,6 +153,7 @@ class AloneMemoryWindow(QDialog):
         self.load_goals_data()
         self.load_relationships_data()
         self.load_tasks_data()
+        self.load_calendar_data()
 
     # --- KEY-VALUE TABS CREATOR (PROFILE & PREFERENCES) ---
     def create_key_value_tab(self, is_preferences):
@@ -744,6 +747,207 @@ class AloneMemoryWindow(QDialog):
         self.task_due_input.clear()
         self.task_project_input.clear()
         self.task_goal_input.clear()
+
+    # --- CALENDAR TAB CREATOR ---
+    def create_calendar_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Calendar Table
+        self.calendar_table = QTableWidget(0, 8)
+        self.calendar_table.setHorizontalHeaderLabels(["ID", "Title", "Description", "Start Time (Local)", "End Time (Local)", "Location", "Attendees", "Status"])
+        self.calendar_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.calendar_table)
+
+        # Form Controls
+        form = QVBoxLayout()
+        row1 = QHBoxLayout()
+        self.cal_title_input = QLineEdit()
+        self.cal_title_input.setPlaceholderText("Event Title")
+        self.cal_type_combo = QComboBox()
+        self.cal_type_combo.addItems(["meeting", "reminder", "personal", "deadline"])
+        self.cal_status_combo = QComboBox()
+        self.cal_status_combo.addItems(["scheduled", "cancelled"])
+        
+        row1.addWidget(self.cal_title_input)
+        row1.addWidget(self.cal_type_combo)
+        row1.addWidget(self.cal_status_combo)
+        form.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.cal_start_input = QLineEdit()
+        self.cal_start_input.setPlaceholderText("Start Time (YYYY-MM-DD HH:MM:SS)")
+        self.cal_end_input = QLineEdit()
+        self.cal_end_input.setPlaceholderText("End Time (YYYY-MM-DD HH:MM:SS)")
+        row2.addWidget(self.cal_start_input)
+        row2.addWidget(self.cal_end_input)
+        form.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        self.cal_location_input = QLineEdit()
+        self.cal_location_input.setPlaceholderText("Location")
+        self.cal_attendees_input = QLineEdit()
+        self.cal_attendees_input.setPlaceholderText("Attendees (comma-separated)")
+        row3.addWidget(self.cal_location_input)
+        row3.addWidget(self.cal_attendees_input)
+        form.addLayout(row3)
+
+        self.cal_desc_input = QTextEdit()
+        self.cal_desc_input.setPlaceholderText("Event Description...")
+        self.cal_desc_input.setFixedHeight(45)
+        form.addWidget(self.cal_desc_input)
+
+        # Action Buttons
+        actions = QHBoxLayout()
+        self.cal_id_label = QLabel("New Event (Auto-ID)")
+        self.cal_id_label.setStyleSheet("color: rgba(255,255,255,100); font-size: 8pt;")
+        
+        save_btn = QPushButton("Save Event")
+        save_btn.clicked.connect(self.save_calendar)
+        del_btn = QPushButton("Delete Selected")
+        del_btn.setObjectName("delete_btn")
+        del_btn.clicked.connect(self.delete_calendar)
+
+        actions.addWidget(self.cal_id_label)
+        actions.addStretch()
+        actions.addWidget(save_btn)
+        actions.addWidget(del_btn)
+        form.addLayout(actions)
+        layout.addLayout(form)
+
+        # Bind row selection
+        self.calendar_table.itemSelectionChanged.connect(self.autofill_calendar)
+
+        return tab
+
+    def autofill_calendar(self):
+        selected = self.calendar_table.selectedItems()
+        if len(selected) >= 8:
+            self.cal_id_label.setText(selected[0].text())
+            self.cal_title_input.setText(selected[1].text())
+            self.cal_desc_input.setPlainText(selected[2].text())
+            self.cal_start_input.setText(selected[3].text())
+            self.cal_end_input.setText(selected[4].text())
+            self.cal_location_input.setText(selected[5].text())
+            self.cal_attendees_input.setText(selected[6].text())
+            self.cal_status_combo.setCurrentText(selected[7].text())
+
+    def load_calendar_data(self):
+        from datetime import timezone
+        self.calendar_table.setRowCount(0)
+        events = database.get_calendar_events()
+        for row_idx, e in enumerate(events):
+            # Convert start and end to local display format
+            start_local = e["start_time"]
+            end_local = e["end_time"]
+            try:
+                dt_start = datetime.fromisoformat(e["start_time"].replace("Z", "")).replace(tzinfo=timezone.utc)
+                start_local = dt_start.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                dt_end = datetime.fromisoformat(e["end_time"].replace("Z", "")).replace(tzinfo=timezone.utc)
+                end_local = dt_end.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+
+            attendees = e["attendees"]
+            try:
+                # Format JSON list to comma separated
+                import json
+                att_list = json.loads(attendees)
+                if isinstance(att_list, list):
+                    attendees = ", ".join(att_list)
+            except Exception:
+                pass
+
+            self.calendar_table.insertRow(row_idx)
+            self.calendar_table.setItem(row_idx, 0, QTableWidgetItem(e["id"]))
+            self.calendar_table.setItem(row_idx, 1, QTableWidgetItem(e["title"]))
+            self.calendar_table.setItem(row_idx, 2, QTableWidgetItem(e["description"] or ""))
+            self.calendar_table.setItem(row_idx, 3, QTableWidgetItem(start_local))
+            self.calendar_table.setItem(row_idx, 4, QTableWidgetItem(end_local))
+            self.calendar_table.setItem(row_idx, 5, QTableWidgetItem(e["location"] or ""))
+            self.calendar_table.setItem(row_idx, 6, QTableWidgetItem(attendees or ""))
+            self.calendar_table.setItem(row_idx, 7, QTableWidgetItem(e["status"]))
+
+    def save_calendar(self):
+        from core.human_memory.calendar_controller import calendar_controller
+        event_id = self.cal_id_label.text()
+        title = self.cal_title_input.text().strip()
+        desc = self.cal_desc_input.toPlainText().strip() or None
+        start = self.cal_start_input.text().strip()
+        end = self.cal_end_input.text().strip()
+        location = self.cal_location_input.text().strip()
+        att_str = self.cal_attendees_input.text().strip()
+        event_type = self.cal_type_combo.currentText()
+        status = self.cal_status_combo.currentText()
+
+        if not title or not start or not end:
+            QMessageBox.warning(self, "Invalid Input", "Please enter title, start time, and end time, Sir.")
+            return
+
+        attendees = [a.strip() for a in att_str.split(",") if a.strip()]
+
+        def run_save(force=False):
+            if "New Event" in event_id:
+                return calendar_controller.create_event(
+                    title=title, start_time=start, end_time=end,
+                    description=desc, location=location, attendees=attendees,
+                    event_type=event_type, status=status, force=force
+                )
+            else:
+                # reschedules / updates
+                return calendar_controller.update_event(
+                    event_id=event_id, title=title, start_time=start, end_time=end,
+                    description=desc, location=location, attendees=attendees,
+                    event_type=event_type, status=status
+                )
+
+        res = run_save(force=False)
+        if not res["success"]:
+            if res.get("conflict"):
+                reply = QMessageBox.question(
+                    self, "Schedule Conflict",
+                    "This event conflicts with existing schedules. Would you like to schedule it anyway, Sir?",
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    res = run_save(force=True)
+                    if not res["success"]:
+                        QMessageBox.warning(self, "Error", f"Failed to save: {res.get('error')}")
+                else:
+                    return
+            else:
+                QMessageBox.warning(self, "Error", f"Failed to save: {res.get('error')}")
+                return
+
+        self.load_calendar_data()
+        
+        # Reset Inputs
+        self.cal_id_label.setText("New Event (Auto-ID)")
+        self.cal_title_input.clear()
+        self.cal_start_input.clear()
+        self.cal_end_input.clear()
+        self.cal_location_input.clear()
+        self.cal_attendees_input.clear()
+        self.cal_desc_input.clear()
+
+    def delete_calendar(self):
+        from core.human_memory.calendar_controller import calendar_controller
+        event_id = self.cal_id_label.text()
+        if "New Event" in event_id:
+            QMessageBox.warning(self, "No Event Selected", "Please select an event to delete, Sir.")
+            return
+        calendar_controller.delete_event(event_id)
+        self.load_calendar_data()
+        
+        # Reset Inputs
+        self.cal_id_label.setText("New Event (Auto-ID)")
+        self.cal_title_input.clear()
+        self.cal_start_input.clear()
+        self.cal_end_input.clear()
+        self.cal_location_input.clear()
+        self.cal_attendees_input.clear()
+        self.cal_desc_input.clear()
 
 if __name__ == "__main__":
     from PyQt5.QtWidgets import QApplication
