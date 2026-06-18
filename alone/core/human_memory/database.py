@@ -186,6 +186,23 @@ def init_db():
             );
             """)
 
+            # 9. Calendar Events Table
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                location TEXT,
+                attendees TEXT,
+                event_type TEXT,
+                status TEXT CHECK(status IN ('scheduled', 'cancelled')) DEFAULT 'scheduled',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """)
+
             conn.commit()
         finally:
             conn.close()
@@ -695,3 +712,92 @@ def delete_task(task_id):
         finally:
             conn.close()
         print(f"[TASK DELETE] id='{task_id}'")
+
+# --- Calendar Events CRUD ---
+def get_calendar_events():
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, title, description, start_time, end_time, location, attendees, event_type, status, created_at, updated_at FROM calendar_events")
+            rows = cursor.fetchall()
+            events = [dict(row) for row in rows]
+            print(f"[CALENDAR QUERY] count={len(events)}")
+            return events
+        finally:
+            conn.close()
+
+def add_calendar_event(event_id, title, description, start_time, end_time, location="", attendees="[]", event_type="meeting", status="scheduled"):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+            INSERT INTO calendar_events (id, title, description, start_time, end_time, location, attendees, event_type, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (event_id, title, description, start_time, end_time, location, attendees, event_type, status, now, now))
+            
+            # Log to change log
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+            """, ("calendar", event_id, "create", f"Title: {title}, Start: {start_time}, End: {end_time}", now))
+            
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[CALENDAR CREATE] event='{title}', id='{event_id}'")
+
+def update_calendar_event(event_id, title, description, start_time, end_time, location, attendees, event_type, status):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Get original
+            cursor.execute("SELECT title, start_time, end_time, status FROM calendar_events WHERE id = ?", (event_id,))
+            orig_row = cursor.fetchone()
+            orig_val = dict(orig_row) if orig_row else None
+            
+            cursor.execute("""
+            UPDATE calendar_events
+            SET title = ?, description = ?, start_time = ?, end_time = ?, location = ?, attendees = ?, event_type = ?, status = ?, updated_at = ?
+            WHERE id = ?
+            """, (title, description, start_time, end_time, location, attendees, event_type, status, now, event_id))
+            
+            # Log to change log
+            new_val = f"Title: {title}, Start: {start_time}, End: {end_time}, Status: {status}"
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, original_value, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, ("calendar", event_id, "update", str(orig_val), new_val, now))
+            
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[CALENDAR UPDATE] event='{title}', id='{event_id}'")
+
+def delete_calendar_event(event_id):
+    with db_lock:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            cursor.execute("SELECT title, status FROM calendar_events WHERE id = ?", (event_id,))
+            orig_row = cursor.fetchone()
+            orig_val = dict(orig_row) if orig_row else None
+            
+            cursor.execute("DELETE FROM calendar_events WHERE id = ?", (event_id,))
+            
+            # Log to change log
+            cursor.execute("""
+            INSERT INTO memory_change_log (memory_type, memory_id, action, original_value, new_value, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, ("calendar", event_id, "delete", str(orig_val), "deleted", now))
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"[CALENDAR DELETE] id='{event_id}'")
