@@ -874,40 +874,28 @@ Thought:{agent_scratchpad}"""
         return intent
 
     def retrieve_memory_and_respond(self, query: str) -> str:
-        from core.human_memory import service as human_memory_service
-        from core.human_memory import database as hm_db
+        from core.memory_retrieval import memory_retrieval_service
         from core.preferences_service import preference_service
         
         # Log structured retrieve operation
         print(f"[MEMORY RETRIEVE] query='{query}'")
         
-        # Retrieve all contexts
-        from core.human_memory.service import UserProfileService
-        profile_data = UserProfileService.retrieve()
+        # Retrieve context using the Memory Retrieval Service
+        mem_ctx = memory_retrieval_service.retrieve(query)
+        
+        profile_str = "\n".join(mem_ctx["identity"]) if mem_ctx["identity"] else "None"
+        goals_str = "\n".join(mem_ctx["goals"]) if mem_ctx["goals"] else "None"
+        relationships_str = "\n".join(mem_ctx["relationships"]) if mem_ctx["relationships"] else "None"
+        
         all_prefs = preference_service.get_all_preferences()
-        projects = hm_db.get_projects()
-        goals = hm_db.get_goals()
-        relationships = hm_db.get_relationships()
-        
-        # Format them cleanly
-        profile_str = ", ".join([f"{k}: {v}" for k, v in profile_data.items()]) if profile_data else "None"
         prefs_str = ", ".join([f"{k}: {v}" for k, v in all_prefs.items()]) if all_prefs else "None"
-        projects_str = ", ".join([p["name"] for p in projects]) if projects else "None"
-        goals_str = ", ".join([g["title"] for g in goals]) if goals else "None"
-        relationships_str = ", ".join([f"{r['name']} ({r['relation_type']})" for r in relationships]) if relationships else "None"
-        
-        # Semantic search
-        semantic_matches = human_memory_service.search_human_memory(query)
         
         context = (
-            f"User Profile details: {profile_str}\n"
-            f"User Preferences: {prefs_str}\n"
-            f"Projects: {projects_str}\n"
-            f"Goals: {goals_str}\n"
-            f"Contacts: {relationships_str}\n"
+            f"User Profile details:\n{profile_str}\n\n"
+            f"User Preferences: {prefs_str}\n\n"
+            f"Goals:\n{goals_str}\n\n"
+            f"Contacts/Relationships:\n{relationships_str}\n"
         )
-        if semantic_matches:
-            context += f"\n{semantic_matches}"
             
         prompt = (
             "You are A.L.O.N.E., a highly intelligent, witty, and efficient AI personal assistant. "
