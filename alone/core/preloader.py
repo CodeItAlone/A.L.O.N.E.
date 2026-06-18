@@ -37,37 +37,23 @@ def prewarm():
     except Exception as e:
         print(f"[ALONE] LLM warmup failed: {e}")
 
-    # Step 2: Pre-load Whisper into RAM
+    # Step 2: Pre-load Speech-to-Text Provider into RAM
     try:
-        # Dynamically register CUDA paths to environment for faster_whisper if on cuda
-        whisper_cfg = config.get("whisper", {})
-        device = whisper_cfg.get("device", "cpu")
-        compute_type = whisper_cfg.get("compute_type", "int8")
+        from core.stt_provider import get_stt_provider as init_provider
+        import time
         
-        if device == "cuda":
-            cuda_paths = [
-                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin",
-                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.3\bin",
-                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.2\bin",
-                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin",
-                r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin",
-                r"C:\Program Files\NVIDIA\CUDNN\v9.0\bin",
-                r"C:\Program Files\NVIDIA\CUDNN\v8.9\bin"
-            ]
-            for path in cuda_paths:
-                if os.path.exists(path) and path not in os.environ["PATH"]:
-                    os.environ["PATH"] += os.pathsep + path
-                    print(f"[*] Dynamically registered CUDA path: {path}")
-
-        from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel(
-            whisper_cfg.get("model_size", "base.en"),
-            device=device,
-            compute_type=compute_type
-        )
-        print("[ALONE] Whisper ready ✅")
+        provider_type = config.get("stt_provider", "whisper")
+        start_time = time.time()
+        
+        print(f"[STT] Audio Received (Pre-warm initialization)")
+        _stt_provider = init_provider(provider_type, config)
+        
+        latency = time.time() - start_time
+        print(f"[STT] Provider Loaded: {type(_stt_provider).__name__}")
+        print(f"[STT] Latency: {latency:.4f}s")
+        print("[ALONE] Speech-to-Text ready ✅")
     except Exception as e:
-        print(f"[ALONE] Whisper warmup failed: {e}")
+        print(f"[ALONE] Speech-to-Text warmup failed: {e}")
 
     # Step 3: Pre-load OWW wake word model
     try:
@@ -84,5 +70,8 @@ def wait_until_ready(timeout=120):
     _ready.wait(timeout=timeout)
     return _ready.is_set()
 
+def get_stt_provider():
+    return _stt_provider
+
 def get_whisper_model():
-    return _whisper_model
+    return _stt_provider
