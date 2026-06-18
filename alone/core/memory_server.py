@@ -22,7 +22,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         query_params = urllib.parse.parse_qs(parsed_url.query)
 
         # 1. UI Routes
-        if path in ["/memory", "/memory/", "/memory/explorer", "/memory/goals", "/memory/relationships", "/memory/profile", "/memory/preferences", "/memory/projects"]:
+        if path in ["/memory", "/memory/", "/memory/explorer", "/memory/goals", "/memory/relationships", "/memory/profile", "/memory/preferences", "/memory/projects", "/memory/tasks"]:
             self.serve_html()
             return
 
@@ -34,6 +34,11 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         # 3. API: GET /api/memory/search
         if path == "/api/memory/search":
             self.handle_search_memory(query_params)
+            return
+
+        # 4. API: GET /api/tasks
+        if path == "/api/tasks":
+            self.handle_get_tasks()
             return
 
         # Fallback
@@ -50,6 +55,11 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             body = json.loads(body_data)
         except Exception:
             body = {}
+
+        # POST /api/tasks
+        if path == "/api/tasks":
+            self.handle_create_task(body)
+            return
 
         # POST /api/memory/restore/{type}/{id}
         if path.startswith("/api/memory/restore/"):
@@ -81,6 +91,14 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             body = {}
 
+        # PUT /api/tasks/{id}
+        if path.startswith("/api/tasks/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                t_id = parts[3]
+                self.handle_update_task(t_id, body)
+                return
+
         # PUT /api/memory/{type}/{id}
         if path.startswith("/api/memory/"):
             parts = path.split("/")
@@ -95,6 +113,14 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_DELETE(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        # DELETE /api/tasks/{id}
+        if path.startswith("/api/tasks/"):
+            parts = path.split("/")
+            if len(parts) >= 4:
+                t_id = parts[3]
+                self.handle_delete_task(t_id)
+                return
 
         # DELETE /api/memory/{type}/{id}
         if path.startswith("/api/memory/"):
@@ -135,6 +161,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             goals = database.get_goals(include_deleted=True)
             relationships = database.get_relationships(include_deleted=True)
             projects = database.get_projects(include_deleted=True)
+            tasks = database.get_tasks()
 
             # Change log
             with database.db_lock:
@@ -148,7 +175,8 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             active_goals = sum(1 for g in goals if g.get("is_deleted") == 0)
             active_rels = sum(1 for r in relationships if r.get("is_deleted") == 0)
             active_projs = sum(1 for p in projects if p.get("is_deleted") == 0)
-            total_active = len(identity_data) + len(preferences_data) + active_goals + active_rels + active_projs
+            active_tasks = len(tasks)
+            total_active = len(identity_data) + len(preferences_data) + active_goals + active_rels + active_projs + active_tasks
 
             # Most active memory type based on logs
             type_counts = {}
@@ -164,6 +192,7 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "goals_count": active_goals,
                 "relationships_count": active_rels,
                 "projects_count": active_projs,
+                "tasks_count": active_tasks,
                 "identity_count": len(identity_data),
                 "preferences_count": len(preferences_data),
                 "most_active_type": most_active,
@@ -176,11 +205,58 @@ class MemoryHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 "goals": goals,
                 "relationships": relationships,
                 "projects": projects,
+                "tasks": tasks,
                 "change_log": change_log,
                 "stats": stats
             })
         except Exception as e:
             self.send_json({"error": str(e)}, 500)
+
+    def handle_get_tasks(self):
+        try:
+            tasks = database.get_tasks()
+            self.send_json(tasks)
+        except Exception as e:
+            self.send_json({"error": str(e)}, 500)
+
+    def handle_create_task(self, body):
+        import uuid
+        try:
+            m_id = str(uuid.uuid4())[:8]
+            title = body.get("title")
+            desc = body.get("description", "")
+            priority = body.get("priority", "MEDIUM")
+            status = body.get("status", "PENDING")
+            due_date = body.get("due_date")
+            project_id = body.get("project_id")
+            goal_id = body.get("goal_id")
+            
+            database.add_task(m_id, title, desc, priority, status, due_date, project_id, goal_id)
+            self.send_json({"success": True, "id": m_id})
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
+
+    def handle_update_task(self, t_id, body):
+        try:
+            title = body.get("title")
+            desc = body.get("description", "")
+            priority = body.get("priority", "MEDIUM")
+            status = body.get("status", "PENDING")
+            due_date = body.get("due_date")
+            project_id = body.get("project_id")
+            goal_id = body.get("goal_id")
+            
+            database.update_task(t_id, title, desc, priority, status, due_date, project_id, goal_id)
+            self.send_json({"success": True})
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
+
+    def handle_delete_task(self, t_id):
+        try:
+            database.delete_task(t_id)
+            self.send_json({"success": True})
+        except Exception as e:
+            self.send_json({"success": False, "error": str(e)}, 500)
 
     def handle_search_memory(self, query_params):
         q = query_params.get("q", [""])[0]
