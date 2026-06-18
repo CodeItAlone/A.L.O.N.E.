@@ -14,7 +14,7 @@ _interrupt_detected = threading.Event()
 
 # Active listening globals
 _last_interaction_time = 0.0
-_active_window_duration = 15.0  # 15 seconds active listening window
+_active_window_duration = 10.0  # 10 seconds active listening window
 
 def update_last_interaction_time():
     global _last_interaction_time
@@ -51,77 +51,58 @@ def normalize_text(text):
 
 def match_wake_word_fuzzy(normalized_text, threshold=0.85):
     """
-    Checks if normalized_text starts with or contains a fuzzy match of target phrases.
+    Checks if normalized_text starts with a target wake word (exact or fuzzy).
     Targets: "hey alone", "ok alone", "listen".
-    Do NOT trigger on standalone "alone".
     Returns (detected, matched_phrase, confidence, clean_command).
     """
-    words = normalized_text.split()
-    if not words:
-        return False, "", 0.0, normalized_text
-        
-    best_sim = 0.0
-    best_match_phrase = ""
-    
-    # 1. Fuzzy match primary targets
-    # We support 2-word targets: "hey alone", "ok alone"
-    two_word_targets = ["hey alone", "ok alone"]
-    if len(words) >= 2:
-        for i in range(len(words) - 1):
-            phrase = words[i] + " " + words[i+1]
-            for target in two_word_targets:
-                dist = levenshtein_distance(phrase, target)
-                sim = 1.0 - (dist / max(len(phrase), len(target)))
-                if sim > best_sim:
-                    best_sim = sim
-                    best_match_phrase = phrase
-                    
-    # We support 1-word targets: "listen"
-    one_word_targets = ["listen"]
-    for i in range(len(words)):
-        phrase = words[i]
-        for target in one_word_targets:
-            dist = levenshtein_distance(phrase, target)
-            sim = 1.0 - (dist / max(len(phrase), len(target)))
-            if sim > best_sim:
-                best_sim = sim
-                best_match_phrase = phrase
-
-    # 2. Exact match phonetic triggers
-    two_word_phonetic_triggers = [
+    normalized = normalized_text.lower().strip()
+    primary_targets = ["hey alone", "ok alone", "listen"]
+    exact_targets = [
+        "hey alone", "ok alone", "listen",
         "hey aloon", "hey alon", "hey allon", "hey alloon", "hey allone", "hey loone", 
         "hay alone", "hay alon", "hay alloon", "hey salon", "hey along", "hey low", 
         "he alone", "he alon", "ok aloon", "ok alon", "ok allon", "ok alloon", 
         "ok allone", "ok loone", "okay alone", "okay alon", "okay alloon", "okay aloon"
     ]
-    if len(words) >= 2:
-        for i in range(len(words) - 1):
-            phrase = words[i] + " " + words[i+1]
-            if phrase in two_word_phonetic_triggers:
-                if 0.98 > best_sim:
-                    best_sim = 0.98
-                    best_match_phrase = phrase
-                    
-    one_word_phonetic_triggers = [
-        "listening", "listened", "lessen", "lesson", "liston"
-    ]
-    for i in range(len(words)):
-        phrase = words[i]
-        if phrase in one_word_phonetic_triggers:
-            if 0.98 > best_sim:
-                best_sim = 0.98
-                best_match_phrase = phrase
-                
+    
+    # Step 2: Exact match first
+    for target in exact_targets:
+        if normalized == target:
+            print("[VOICE UX]")
+            print("[WAKE WORD DETECTED]")
+            return True, target, 1.0, ""
+        if normalized.startswith(target + " "):
+            clean_command = normalized[len(target):].strip()
+            print("[VOICE UX]")
+            print("[WAKE WORD DETECTED]")
+            return True, target, 1.0, clean_command
+
+    # Step 3: Fallback fuzzy matching (similarity >= threshold) on the prefix
+    words = normalized.split()
+    if not words:
+        return False, "", 0.0, normalized_text
+
+    best_sim = 0.0
+    best_target = ""
+    best_clean_command = normalized
+
+    for target in primary_targets:
+        target_words = target.split()
+        n_words = len(target_words)
+        if len(words) >= n_words:
+            prefix = " ".join(words[:n_words])
+            dist = levenshtein_distance(prefix, target)
+            sim = 1.0 - (dist / max(len(prefix), len(target)))
+            if sim >= threshold and sim > best_sim:
+                best_sim = sim
+                best_target = target
+                best_clean_command = " ".join(words[n_words:])
+
     if best_sim >= threshold:
-        clean_command = normalized_text
-        if normalized_text.startswith(best_match_phrase):
-            clean_command = normalized_text[len(best_match_phrase):].strip()
-        else:
-            idx = normalized_text.find(best_match_phrase)
-            if idx != -1:
-                clean_command = (normalized_text[:idx] + " " + normalized_text[idx + len(best_match_phrase):]).strip()
-        return True, best_match_phrase, best_sim, clean_command
-        
+        print("[VOICE UX]")
+        print("[WAKE WORD DETECTED]")
+        return True, best_target, best_sim, best_clean_command
+
     return False, "", 0.0, normalized_text
 
 
@@ -382,9 +363,9 @@ def _listen_loop(callback):
     try:
         while _listening:
             if not _paused:
-                # 1. Check if FOLLOW_UP timed out after 5 seconds
+                # 1. Check if FOLLOW_UP timed out after 10 seconds
                 if get_state() == AssistantState.FOLLOW_UP:
-                    if time.time() - get_follow_up_start_time() > 5.0:
+                    if time.time() - get_follow_up_start_time() > 10.0:
                         set_state(AssistantState.IDLE)
                         
                 # 2. Check if interrupt was detected by background thread
