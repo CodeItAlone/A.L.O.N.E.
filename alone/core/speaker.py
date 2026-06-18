@@ -31,6 +31,7 @@ def speak_async(text):
 
 def stop_tts():
     global _tts_process
+    clear_speech_queue()
     with _tts_process_lock:
         if _tts_process and _tts_process.poll() is None:
             print("[DEBUG SPEAKER] Terminating TTS process...")
@@ -40,6 +41,7 @@ def stop_tts():
             except subprocess.TimeoutExpired:
                 _tts_process.kill()
             _tts_process = None
+    set_state(AssistantState.LISTENING)
 
 def clear_speech_queue():
     while not _speech_queue.empty():
