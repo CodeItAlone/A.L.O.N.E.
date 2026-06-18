@@ -7,9 +7,10 @@ import sys
 _ready = threading.Event()
 _whisper_model = None
 
-# Robust config.yaml loading
+# Ensure project root is in path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, "config.yaml")
+sys.path.append(base_dir)
 
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
@@ -17,6 +18,13 @@ with open(config_path, "r") as f:
 def prewarm():
     global _whisper_model
     print("[ALONE] Pre-warming all systems...")
+
+    # Start Memory Web Server
+    try:
+        from core.memory_server import start_server
+        start_server()
+    except Exception as e:
+        print(f"[ALONE] Failed to start Memory Server: {e}")
 
     # Step 1: Wake up Ollama — loads model into VRAM
     try:
