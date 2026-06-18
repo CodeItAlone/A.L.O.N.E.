@@ -442,6 +442,7 @@
             <button class="nav-btn" onclick="switchTab('profile')">Identity</button>
             <button class="nav-btn" onclick="switchTab('preferences')">Preferences</button>
             <button class="nav-btn" onclick="switchTab('projects')">Projects</button>
+            <button class="nav-btn" onclick="switchTab('tasks')">Tasks</button>
             <button class="nav-btn" onclick="switchTab('audit')">Audit Logs</button>
         </nav>
     </aside>
@@ -471,6 +472,10 @@
                     <span class="stat-lbl">Active Relationships</span>
                 </div>
                 <div class="stat-card">
+                    <span class="stat-val" id="stat-tasks">0</span>
+                    <span class="stat-lbl">Active Tasks</span>
+                </div>
+                <div class="stat-card">
                     <span class="stat-val" id="stat-active-type">None</span>
                     <span class="stat-lbl">Most Active Category</span>
                 </div>
@@ -489,6 +494,7 @@
                     <option value="identity">Identity</option>
                     <option value="goal">Goals</option>
                     <option value="relationship">Relationships</option>
+                    <option value="task">Tasks</option>
                 </select>
             </div>
             <div id="explorer-results" class="memory-list">
@@ -524,6 +530,12 @@
         <section id="tab-projects" class="tab-content card" style="display: none;">
             <h2>Project Workspace</h2>
             <div id="projects-list" class="memory-list"></div>
+        </section>
+
+        <!-- TASKS TAB -->
+        <section id="tab-tasks" class="tab-content card" style="display: none;">
+            <h2>Task Management</h2>
+            <div id="tasks-list" class="memory-list"></div>
         </section>
 
         <!-- AUDIT LOGS TAB -->
@@ -572,6 +584,7 @@
             'profile': '/memory/profile',
             'preferences': '/memory/preferences',
             'projects': '/memory/projects',
+            'tasks': '/memory/tasks',
             'audit': '/memory/audit'
         };
 
@@ -596,6 +609,7 @@
                 profile: 'Identity Editor',
                 preferences: 'Preferences Manager',
                 projects: 'Project Workspace',
+                tasks: 'Task Management',
                 audit: 'Memory Audit Trail'
             };
             document.getElementById('page-title').textContent = titles[tabId] || 'Memory Editor';
@@ -603,10 +617,11 @@
             // Show 'Add' action in header
             const globalActions = document.getElementById('global-actions');
             globalActions.innerHTML = '';
-            if (['goals', 'relationships', 'profile', 'preferences', 'projects'].includes(tabId)) {
+            if (['goals', 'relationships', 'profile', 'preferences', 'projects', 'tasks'].includes(tabId)) {
                 const addBtn = document.createElement('button');
                 addBtn.className = 'btn btn-success';
-                addBtn.textContent = `+ Create ${tabId === 'profile' ? 'Identity' : tabId.slice(0,-1).toUpperCase()}`;
+                let label = tabId === 'profile' ? 'IDENTITY' : tabId === 'preferences' ? 'PREFERENCE' : tabId === 'tasks' ? 'TASK' : tabId.slice(0,-1).toUpperCase();
+                addBtn.textContent = `+ Create ${label}`;
                 addBtn.onclick = () => openCreateModal(tabId);
                 globalActions.appendChild(addBtn);
             }
@@ -649,6 +664,7 @@
             document.getElementById('stat-total').textContent = stats.total_memories || 0;
             document.getElementById('stat-goals').textContent = stats.goals_count || 0;
             document.getElementById('stat-rels').textContent = stats.relationships_count || 0;
+            document.getElementById('stat-tasks').textContent = stats.tasks_count || 0;
             document.getElementById('stat-active-type').textContent = stats.most_active_type || 'None';
             document.getElementById('stat-last-update').textContent = stats.last_updated || 'Never';
         }
@@ -688,6 +704,15 @@
             (currentData.projects || []).forEach(p => {
                 projList.appendChild(createProjectCard(p));
             });
+
+            // Populate Tasks
+            const tasksList = document.getElementById('tasks-list');
+            if (tasksList) {
+                tasksList.innerHTML = '';
+                (currentData.tasks || []).forEach(t => {
+                    tasksList.appendChild(createTaskCard(t));
+                });
+            }
 
             // Populate Audit logs
             const auditList = document.getElementById('audit-list');
@@ -788,6 +813,33 @@
             return div;
         }
 
+        function createTaskCard(t) {
+            const div = document.createElement('div');
+            div.className = `memory-item`;
+            
+            let badges = `<span class="badge">Task</span>`;
+            if (t.priority) {
+                badges += ` <span class="badge" style="background-color: hsla(0, 0%, 50%, 0.1); color: var(--text-secondary); border-color: hsla(0,0%,50%,0.2);">${t.priority}</span>`;
+            }
+
+            div.innerHTML = `
+                <div class="memory-info">
+                    <div class="memory-meta">${badges}</div>
+                    <div class="memory-title">${t.title}</div>
+                    <div class="memory-body">${t.description || 'No description'}</div>
+                    <div class="memory-body" style="font-size: 13px; color: var(--accent-color);">
+                        Status: <strong>${t.status}</strong> | Due: <strong>${t.due_date || t.dueDate || 'None'}</strong>
+                    </div>
+                </div>
+                <div class="action-row">
+                    ${t.status !== 'COMPLETED' ? `<button class="btn btn-success" onclick="completeTask('${t.id}')">Complete</button>` : ''}
+                    <button class="btn" onclick="openEditModal('task', '${t.id}')">Edit</button>
+                    <button class="btn btn-danger" onclick="deleteItem('task', '${t.id}')">Delete</button>
+                </div>
+            `;
+            return div;
+        }
+
         function createKeyValueCard(i, type) {
             const div = document.createElement('div');
             div.className = 'memory-item';
@@ -809,7 +861,33 @@
         async function deleteItem(type, id) {
             if (!confirm(`Are you sure you want to delete this ${type} memory, Sir?`)) return;
             try {
-                const res = await fetch(`/api/memory/${type}/${id}`, { method: 'DELETE' });
+                const url = type === 'task' ? `/api/tasks/${id}` : `/api/memory/${type}/${id}`;
+                const res = await fetch(url, { method: 'DELETE' });
+                const r = await res.json();
+                if (r.success) loadMemoryData();
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function completeTask(id) {
+            try {
+                const task = currentData.tasks.find(t => t.id === id);
+                if (!task) return;
+                const mappedPayload = {
+                    title: task.title,
+                    description: task.description,
+                    priority: task.priority,
+                    status: 'COMPLETED',
+                    due_date: task.due_date || task.dueDate,
+                    project_id: task.project_id || task.projectId,
+                    goal_id: task.goal_id || task.goalId
+                };
+                const res = await fetch(`/api/tasks/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(mappedPayload)
+                });
                 const r = await res.json();
                 if (r.success) loadMemoryData();
             } catch (err) {
@@ -860,9 +938,51 @@
                 else if (type === 'project') item = currentData.projects.find(p => p.id === id);
                 else if (type === 'identity') item = currentData.identity.find(i => i.key === id);
                 else if (type === 'preference') item = currentData.preferences.find(p => p.key === id);
+                else if (type === 'task') item = currentData.tasks.find(t => t.id === id);
             }
 
-            if (type === 'goal') {
+            if (type === 'task') {
+                container.innerHTML = `
+                    <div class="form-group">
+                        <label class="form-label">Title</label>
+                        <input type="text" class="form-input" id="form-task-title" value="${item.title || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <input type="text" class="form-input" id="form-task-desc" value="${item.description || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Priority</label>
+                        <select class="form-input" id="form-task-priority">
+                            <option value="LOW" ${item.priority==='LOW'?'selected':''}>Low</option>
+                            <option value="MEDIUM" ${item.priority==='MEDIUM'||!item.priority?'selected':''}>Medium</option>
+                            <option value="HIGH" ${item.priority==='HIGH'?'selected':''}>High</option>
+                            <option value="CRITICAL" ${item.priority==='CRITICAL'?'selected':''}>Critical</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Status</label>
+                        <select class="form-input" id="form-task-status">
+                            <option value="PENDING" ${item.status==='PENDING'||!item.status?'selected':''}>Pending</option>
+                            <option value="IN_PROGRESS" ${item.status==='IN_PROGRESS'?'selected':''}>In Progress</option>
+                            <option value="COMPLETED" ${item.status==='COMPLETED'?'selected':''}>Completed</option>
+                            <option value="CANCELLED" ${item.status==='CANCELLED'?'selected':''}>Cancelled</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Due Date</label>
+                        <input type="text" class="form-input" id="form-task-due" value="${item.due_date || item.dueDate || ''}" placeholder="YYYY-MM-DD">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Linked Project ID (Optional)</label>
+                        <input type="text" class="form-input" id="form-task-project" value="${item.project_id || item.projectId || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Linked Goal ID (Optional)</label>
+                        <input type="text" class="form-input" id="form-task-goal" value="${item.goal_id || item.goalId || ''}">
+                    </div>
+                `;
+            } else if (type === 'goal') {
                 container.innerHTML = `
                     <div class="form-group">
                         <label class="form-label">Title</label>
@@ -954,7 +1074,17 @@
             const { type, id } = currentEditingItem;
             let payload = {};
 
-            if (type === 'goal') {
+            if (type === 'task') {
+                payload = {
+                    title: document.getElementById('form-task-title').value,
+                    description: document.getElementById('form-task-desc').value,
+                    priority: document.getElementById('form-task-priority').value,
+                    status: document.getElementById('form-task-status').value,
+                    due_date: document.getElementById('form-task-due').value || null,
+                    project_id: document.getElementById('form-task-project').value || null,
+                    goal_id: document.getElementById('form-task-goal').value || null
+                };
+            } else if (type === 'goal') {
                 payload = {
                     title: document.getElementById('form-goal-title').value.strip ? document.getElementById('form-goal-title').value.strip() : document.getElementById('form-goal-title').value,
                     description: document.getElementById('form-goal-desc').value,
@@ -982,7 +1112,9 @@
                 };
             }
 
-            const url = id ? `/api/memory/${type}/${id}` : `/api/memory/${type}`;
+            const url = type === 'task'
+                ? (id ? `/api/tasks/${id}` : `/api/tasks`)
+                : (id ? `/api/memory/${type}/${id}` : `/api/memory/${type}`);
             const method = id ? 'PUT' : 'POST';
 
             try {
@@ -1026,6 +1158,9 @@
                 }
                 if (filterVal === 'all' || filterVal === 'relationship') {
                     currentData.relationships?.filter(r => !r.is_deleted).forEach(r => items.push(createRelationshipCard(r)));
+                }
+                if (filterVal === 'all' || filterVal === 'task') {
+                    currentData.tasks?.forEach(t => items.push(createTaskCard(t)));
                 }
                 items.forEach(el => container.appendChild(el));
                 return;
