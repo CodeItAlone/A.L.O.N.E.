@@ -455,7 +455,7 @@ Thought:{agent_scratchpad}"""
                 desc_str = f" - {p['description']}" if p['description'] else ""
                 phase_str = f" | Phase: {p['phase']}" if p['phase'] else ""
                 prio_str = f" | Priority: {p['priority']}" if p['priority'] else ""
-                lines.append(f"- **{p['name']}** (ID: {p['id']}, Status: {p['status']}){phase_str}{prio_str}{desc_str}")
+                lines.append(f"- **{p['name']}** (Status: {p['status']}){phase_str}{prio_str}{desc_str}")
             return "Sir, here are your current projects:\n\n" + "\n".join(lines)
 
         status_match = re.search(
@@ -516,8 +516,9 @@ Thought:{agent_scratchpad}"""
                 target_str = f" | Target: {g['targetDate']}" if g['targetDate'] else ""
                 cat_str = f" | Category: {g['category']}" if g['category'] else ""
                 prio_str = f" | Priority: {g['priority']}" if g['priority'] else ""
-                prog_str = f" | Progress: {g['progress']}%"
-                lines.append(f"- **{g['title']}** (ID: {g['id']}, Status: {g['status']}){prog_str}{cat_str}{prio_str}{target_str}")
+                prog_str = f" | Progress: {g['progress']}%" if g['progress'] > 0 else ""
+                status_str = f" (Status: {g['status'].replace('_', ' ')})"
+                lines.append(f"- **{g['title']}**{status_str}{prog_str}{cat_str}{prio_str}{target_str}")
             return "Sir, here are your current goals:\n\n" + "\n".join(lines)
 
         # 2. Goal Deletion Intent
@@ -612,8 +613,8 @@ Thought:{agent_scratchpad}"""
             cat_part = f", category: {g['category']}" if g['category'] else ""
             prio_part = f", priority: {g['priority']}" if g['priority'] else ""
             target_part = f", target date: {g['targetDate']}" if g['targetDate'] else ""
-            proj_part = f", linked to project IDs: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
-            return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']}){cat_part}{prio_part}{target_part}{proj_part}."
+            proj_part = f", linked to project: {', '.join(g['projectIds'])}" if g['projectIds'] else ""
+            return f"Understood, Sir. I have created the goal '{g['title']}'{cat_part}{prio_part}{target_part}{proj_part}."
         
         # Regex fallback for explicit goal commands if LLM extraction failed
         create_pattern = r"(?:alone\s+)?(?:create|start|new|add)\s+goal\s+(.+)"
@@ -623,7 +624,7 @@ Thought:{agent_scratchpad}"""
             res = goal_controller.create_goal(title=title)
             if res["success"]:
                 g = res["goal"]
-                return f"Understood, Sir. I have created the goal '{g['title']}' (ID: {g['id']})."
+                return f"Understood, Sir. I have created the goal '{g['title']}'."
 
         return None
 
