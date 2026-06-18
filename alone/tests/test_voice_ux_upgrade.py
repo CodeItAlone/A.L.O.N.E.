@@ -85,10 +85,10 @@ def test_follow_up_timeout():
     set_state(AssistantState.FOLLOW_UP)
     assert get_state() == AssistantState.FOLLOW_UP
     
-    # Mock time.time to simulate 5.1 seconds later
+    # Mock time.time to simulate 10.1 seconds later
     start_time = get_follow_up_start_time()
     
-    with patch("time.time", return_value=start_time + 5.1):
+    with patch("time.time", return_value=start_time + 10.1):
         # Triggering follow-up timeout logic simulation
         if get_state() == AssistantState.FOLLOW_UP:
             set_state(AssistantState.IDLE)
