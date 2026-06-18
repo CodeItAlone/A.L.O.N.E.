@@ -128,6 +128,47 @@ class RelationshipMemoryProvider(BaseMemoryProvider):
         results.sort(key=lambda x: x["score"], reverse=True)
         return "\n".join([r["content"] for r in results])
 
+class TaskMemoryProvider(BaseMemoryProvider):
+    def get_relevance(self, query: str) -> float:
+        query_lower = query.lower()
+        if any(k in query_lower for k in ["what am i working on", "my tasks", "what are my tasks", "current tasks", "to do", "todo"]):
+            return 0.95
+        if any(k in query_lower for k in ["task", "tasks", "pending tasks", "action items"]):
+            return 0.7
+        return 0.1
+
+    def search(self, query: str) -> List[Dict]:
+        from core.human_memory import database
+        tasks = database.get_tasks()
+        relevance = self.get_relevance(query)
+        results = []
+        for t in tasks:
+            title = t.get("title", "")
+            desc = t.get("description", "") or ""
+            status = t.get("status", "")
+            priority = t.get("priority", "")
+            due = t.get("due_date", "") or ""
+            content = f"Task: {title} | Status: {status} | Priority: {priority} | Due Date: {due} | Description: {desc}"
+            
+            q_words = [w for w in query.lower().split() if len(w) > 1]
+            match_score = 0.0
+            if q_words:
+                matches = sum(1 for w in q_words if w in title.lower() or w in desc.lower())
+                match_score = matches / len(q_words)
+            score = max(relevance, match_score)
+            results.append({
+                "memory_type": "task",
+                "content": content,
+                "score": score
+            })
+        return results
+
+    def retrieve(self, query: str) -> str:
+        results = self.search(query)
+        results = [r for r in results if r["score"] > 0.1]
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return "\n".join([r["content"] for r in results])
+
 class MemoryRetrievalService:
     def __init__(self):
         self.providers = []
@@ -152,7 +193,8 @@ class MemoryRetrievalService:
         context = {
             "identity": [],
             "goals": [],
-            "relationships": []
+            "relationships": [],
+            "tasks": []
         }
         for r in ranked:
             if r["score"] > 0.1:
@@ -163,6 +205,8 @@ class MemoryRetrievalService:
                     context["goals"].append(r["content"])
                 elif m_type == "relationship":
                     context["relationships"].append(r["content"])
+                elif m_type == "task":
+                    context["tasks"].append(r["content"])
         return context
 
 # Singleton instance
@@ -170,3 +214,4 @@ memory_retrieval_service = MemoryRetrievalService()
 memory_retrieval_service.register_provider(IdentityMemoryProvider())
 memory_retrieval_service.register_provider(GoalMemoryProvider())
 memory_retrieval_service.register_provider(RelationshipMemoryProvider())
+memory_retrieval_service.register_provider(TaskMemoryProvider())
