@@ -9,6 +9,30 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.human_memory import database, service
 from tools.human_memory import search_human_memory, manage_goals, manage_projects, manage_contacts
 
+@pytest.fixture(autouse=True)
+def cleanup_test_data():
+    # Clean before test
+    _do_cleanup()
+    yield
+    # Clean after test
+    _do_cleanup()
+
+def _do_cleanup():
+    with database.db_lock:
+        conn = database.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_profile WHERE key IN ('test_key', 'name')")
+            cursor.execute("DELETE FROM preferences WHERE key = 'test_pref'")
+            cursor.execute("DELETE FROM projects WHERE id IN ('test_proj_123', 'p1')")
+            cursor.execute("DELETE FROM goals WHERE id IN ('test_goal_123', 'g1', 'Test Goal Tool')")
+            cursor.execute("DELETE FROM relationships WHERE id IN ('test_rel_123', 'r1')")
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
 def test_database_profile_crud():
     # Test setting and retrieving profile field
     database.set_profile_field("test_key", "test_value")
@@ -56,9 +80,17 @@ def test_database_projects_crud():
     
     # Delete
     database.delete_project(project_id)
-    projects = database.get_projects()
+    projects = database.get_projects(include_deleted=False)
     matched = [p for p in projects if p["id"] == project_id]
     assert len(matched) == 0
+
+    # Clean up completely (hard delete for tests so it doesn't conflict)
+    with database.db_lock:
+        conn = database.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+        conn.close()
 
 def test_database_goals_crud():
     goal_id = "test_goal_123"
@@ -77,9 +109,17 @@ def test_database_goals_crud():
     assert matched[0]["status"] == "in_progress"
     
     database.delete_goal(goal_id)
-    goals = database.get_goals()
+    goals = database.get_goals(include_deleted=False)
     matched = [g for g in goals if g["id"] == goal_id]
     assert len(matched) == 0
+
+    # Clean up completely (hard delete for tests so it doesn't conflict)
+    with database.db_lock:
+        conn = database.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+        conn.commit()
+        conn.close()
 
 def test_database_relationships_crud():
     rel_id = "test_rel_123"
@@ -98,9 +138,17 @@ def test_database_relationships_crud():
     assert matched[0]["notes"] == "Has a dark suit"
     
     database.delete_relationship(rel_id)
-    rels = database.get_relationships()
+    rels = database.get_relationships(include_deleted=False)
     matched = [r for r in rels if r["id"] == rel_id]
     assert len(matched) == 0
+
+    # Clean up completely (hard delete for tests so it doesn't conflict)
+    with database.db_lock:
+        conn = database.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM relationships WHERE id = ?", (rel_id,))
+        conn.commit()
+        conn.close()
 
 def test_service_context_summary():
     # Setup test entries
@@ -120,6 +168,16 @@ def test_service_context_summary():
     database.delete_project("p1")
     database.delete_goal("g1")
     database.delete_relationship("r1")
+
+    # Hard delete setup entries
+    with database.db_lock:
+        conn = database.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM projects WHERE id = 'p1'")
+        cursor.execute("DELETE FROM goals WHERE id = 'g1'")
+        cursor.execute("DELETE FROM relationships WHERE id = 'r1'")
+        conn.commit()
+        conn.close()
 
 @patch('core.human_memory.service.projects_vector_col')
 @patch('core.human_memory.service.goals_vector_col')
