@@ -24,6 +24,9 @@ class LocalEmbeddingFunction(EmbeddingFunction):
         return [e.tolist() for e in embeddings]
 
 # Initialize ChromaDB persistent client and collections
+client = None
+embedding_fn = None
+
 try:
     client = chromadb.PersistentClient(path=db_path)
     embedding_fn = LocalEmbeddingFunction()
@@ -40,6 +43,7 @@ except Exception as e:
     print(f"[!] Critical Error initializing ChromaDB: {e}")
     # Bounded fallback to prevent system crash
     client = None
+    embedding_fn = None
     memory_col = None
     pref_col = None
 
