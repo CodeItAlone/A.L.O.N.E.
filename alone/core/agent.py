@@ -628,6 +628,99 @@ Thought:{agent_scratchpad}"""
 
         return None
 
+    def handle_task_intents(self, cleaned_input: str, raw_input: str) -> str:
+        import re
+        from core.human_memory.task_controller import task_controller
+        
+        cleaned_input_clean = cleaned_input.rstrip(".?!").strip()
+        
+        list_all_phrases = ["list tasks", "list my tasks", "show tasks", "show my tasks", "task list", "what are my tasks", "what are my tasks?"]
+        list_pending_phrases = ["show pending tasks", "list pending tasks", "what are my pending tasks", "what are my pending tasks?"]
+        
+        if cleaned_input_clean in list_all_phrases:
+            res = task_controller.get_tasks()
+            if not res["success"] or not res["tasks"]:
+                return "No tasks found."
+            lines = []
+            for idx, t in enumerate(res["tasks"], 1):
+                status_text = t['status'].replace('_', ' ').title()
+                lines.append(f"{idx}. {t['title']} ({status_text})")
+            return "\n".join(lines)
+            
+        if cleaned_input_clean in list_pending_phrases:
+            res = task_controller.get_pending_tasks()
+            if not res["success"] or not res["tasks"]:
+                return "No pending tasks found."
+            lines = []
+            for idx, t in enumerate(res["tasks"], 1):
+                status_text = t['status'].replace('_', ' ').title()
+                lines.append(f"{idx}. {t['title']} ({status_text})")
+            return "\n".join(lines)
+
+        complete_match = re.search(
+            r"(?:alone\s+)?mark\s+(?:task\s+)?(.+?)\s+(?:as\s+)?complete",
+            raw_input,
+            re.IGNORECASE
+        )
+        if not complete_match:
+            complete_match = re.search(
+                r"(?:alone\s+)?complete\s+(?:task\s+)?(.+)",
+                raw_input,
+                re.IGNORECASE
+            )
+        if complete_match:
+            task_ident = complete_match.group(1).strip().lower()
+            res = task_controller.get_tasks()
+            found_task = None
+            if res["success"]:
+                for t in res["tasks"]:
+                    t_title = t["title"].lower().strip()
+                    t_id = t["id"].lower().strip()
+                    if t_id == task_ident or t_title == task_ident or task_ident in t_title or t_title in task_ident:
+                        found_task = t
+                        break
+            if not found_task:
+                return f"Sir, I could not find a task with ID or title '{task_ident}'."
+            task_controller.complete_task(found_task["id"])
+            return "Task updated successfully."
+
+        delete_match = re.search(
+            r"(?:alone\s+)?delete\s+task\s+(.+)",
+            raw_input,
+            re.IGNORECASE
+        )
+        if delete_match:
+            task_ident = delete_match.group(1).strip().lower()
+            res = task_controller.get_tasks()
+            found_task = None
+            if res["success"]:
+                for t in res["tasks"]:
+                    t_title = t["title"].lower().strip()
+                    t_id = t["id"].lower().strip()
+                    if t_id == task_ident or t_title == task_ident or task_ident in t_title or t_title in task_ident:
+                        found_task = t
+                        break
+            if not found_task:
+                return f"Sir, I could not find a task with ID or title '{task_ident}'."
+            task_controller.delete_task(found_task["id"])
+            return "Task deleted successfully."
+
+        # Explicit fallback regex for "create task <title>"
+        create_pattern = r"(?:alone\s+)?(?:create|add|new)\s+task\s+(.+)"
+        create_match = re.match(create_pattern, raw_input, re.IGNORECASE)
+        if create_match:
+            title = create_match.group(1).strip()
+            res = task_controller.create_task(title=title)
+            if res["success"]:
+                return "Task created successfully."
+
+        # General LLM extraction
+        res = task_controller.process_natural_language_task(self.llm, raw_input)
+        if res["success"]:
+            return "Task created successfully."
+
+        return None
+
     def handle_relationship_intents(self, cleaned_input: str, raw_input: str) -> str:
         import re
         from core.human_memory.relationship_controller import relationship_controller
@@ -726,6 +819,21 @@ Thought:{agent_scratchpad}"""
         for pat in goal_patterns:
             if re.search(pat, cleaned_input):
                 return "GOAL_INTENT"
+            
+        # TASK_INTENT
+        task_patterns = [
+            r"\bcreate\s+(?:a\s+)?task\b",
+            r"\badd\s+(?:a\s+)?task\b",
+            r"\bmark\s+(?:task\s+)?.+?\s+(?:as\s+)?complete\b",
+            r"\bcomplete\s+(?:task\s+)?",
+            r"\bshow\s+(?:pending\s+)?tasks\b",
+            r"\blist\s+(?:pending\s+)?tasks\b",
+            r"\bwhat\s+are\s+my\s+(?:pending\s+)?tasks\b",
+            r"\bdelete\s+task\b"
+        ]
+        for pat in task_patterns:
+            if re.search(pat, cleaned_input):
+                return "TASK_INTENT"
             
         # USER_PROFILE_UPDATE
         profile_patterns = [
@@ -838,6 +946,7 @@ Thought:{agent_scratchpad}"""
             "Classify the user's input into exactly one of these categories:\n"
             "- USER_PROFILE_UPDATE (stating user's name, education, job, role, age, what they study, profession, or general personal profile update)\n"
             "- GOAL_INTENT (creating, listing, deleting, updating, or linking goals/milestones)\n"
+            "- TASK_INTENT (creating, listing, deleting, completing, or retrieving user tasks/to-do lists)\n"
             "- RELATIONSHIP_INTENT (creating, listing, deleting, updating, or retrieving details about contacts, relationships, family members, friends, colleagues, teammates, mentors, or other people)\n"
             "- MEMORY_STORE (saving system preferences, code editors, file/project paths)\n"
             "- MEMORY_RETRIEVE (retrieving name, preferences, projects, goals, relationships)\n"
@@ -856,7 +965,7 @@ Thought:{agent_scratchpad}"""
         try:
             response = self.llm.invoke(messages)
             res_text = response.content.upper().strip()
-            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "RELATIONSHIP_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
+            for cat in ["USER_PROFILE_UPDATE", "GOAL_INTENT", "TASK_INTENT", "RELATIONSHIP_INTENT", "MEMORY_STORE", "MEMORY_RETRIEVE", "GENERAL_CHAT", "TOOL_EXECUTION", "SYSTEM_COMMAND"]:
                 if cat in res_text:
                     return cat
         except Exception as e:
@@ -886,6 +995,7 @@ Thought:{agent_scratchpad}"""
         
         profile_str = "\n".join(mem_ctx["identity"]) if mem_ctx["identity"] else "None"
         goals_str = "\n".join(mem_ctx["goals"]) if mem_ctx["goals"] else "None"
+        tasks_str = "\n".join(mem_ctx["tasks"]) if mem_ctx.get("tasks") else "None"
         relationships_str = "\n".join(mem_ctx["relationships"]) if mem_ctx["relationships"] else "None"
         
         all_prefs = preference_service.get_all_preferences()
@@ -895,6 +1005,7 @@ Thought:{agent_scratchpad}"""
             f"User Profile details:\n{profile_str}\n\n"
             f"User Preferences: {prefs_str}\n\n"
             f"Goals:\n{goals_str}\n\n"
+            f"Tasks:\n{tasks_str}\n\n"
             f"Contacts/Relationships:\n{relationships_str}\n"
         )
             
@@ -973,6 +1084,12 @@ Thought:{agent_scratchpad}"""
                 goal_res = self.handle_goal_intents(cleaned_input, user_input)
                 if goal_res is not None:
                     return goal_res
+
+            # --- TASK_INTENT DIRECT ROUTING ---
+            if intent == "TASK_INTENT":
+                task_res = self.handle_task_intents(cleaned_input, user_input)
+                if task_res is not None:
+                    return task_res
 
             # --- RELATIONSHIP_INTENT DIRECT ROUTING ---
             if intent == "RELATIONSHIP_INTENT":
